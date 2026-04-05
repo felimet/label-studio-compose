@@ -114,11 +114,11 @@ services:
     environment:
       # Database
       - DJANGO_DB=default
-      - POSTGRESDB_HOST=db
-      - POSTGRESDB_PORT=5432
-      - POSTGRESDB_NAME=${POSTGRES_DB:-labelstudio}
-      - POSTGRESDB_USER=${POSTGRES_USER:-labelstudio}
-      - POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRE_HOST=db
+      - POSTGRE_PORT=5432
+      - POSTGRE_NAME=${POSTGRES_DB:-labelstudio}
+      - POSTGRE_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRE_PASSWORD=${POSTGRES_PASSWORD}
       # Redis (task queue + caching)
       - REDIS_LOCATION=redis://:${REDIS_PASSWORD}@redis:6379/1
       # Django

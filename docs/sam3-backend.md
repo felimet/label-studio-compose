@@ -17,7 +17,7 @@ make build-sam3      # 僅建置映像（不啟動）
 make test-sam3       # 在執行中容器內執行 pytest
 ```
 
-首次啟動時，容器會從 HuggingFace 下載 `facebook/sam3` 權重（約 2.4 GB）至 `hf-cache` Docker Volume。後續啟動直接使用快取。
+首次啟動時，容器會從 HuggingFace 下載 `facebook/sam3` 權重（約 3.45 GB，0.9B 參數 F32）至 `hf-cache` Docker Volume。後續啟動直接使用快取。
 
 健康檢查設定 `start_period: 300s`，模型下載期間不會觸發重啟。
 

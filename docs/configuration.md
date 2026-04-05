@@ -6,6 +6,8 @@
 
 ## PostgreSQL
 
+以下為使用者填入 `.env` 的變數；compose 會將 `POSTGRES_*` 轉譯成 Label Studio 內部所需的 `POSTGRE_*` 格式（注意：LS 官方 env var 名稱無 `SDB` 中綴）。
+
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
 | `POSTGRES_USER` | `labelstudio` | 資料庫使用者名稱 |
