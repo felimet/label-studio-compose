@@ -1,10 +1,10 @@
 # ============================================================
 # SAM3 ML Backend — Multi-stage CUDA build
-# Base: NVIDIA CUDA 12.4 + cuDNN (matches torch cu124 wheels)
+# Base: NVIDIA CUDA 12.8 + cuDNN (matches torch cu128 wheels)
 # ============================================================
 
 # ── Stage 1: dependency builder ─────────────────────────────
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -31,7 +31,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Stage 2: runtime ─────────────────────────────────────────
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \

@@ -1,7 +1,7 @@
-# ── PyTorch (CUDA 12.4 wheel) ────────────────────────────────
+# ── PyTorch (CUDA 12.8 wheel) ────────────────────────────────
 # Without GPU (CI/local dev): change index-url to
 #   https://download.pytorch.org/whl/cpu
---index-url https://download.pytorch.org/whl/cu124
+--index-url https://download.pytorch.org/whl/cu128
 torch>=2.4.0,<2.8.0
 torchvision>=0.19.0
 
