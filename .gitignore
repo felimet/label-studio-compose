@@ -1,0 +1,38 @@
+# Secrets — NEVER commit
+.env
+
+# Runtime data volumes
+data/
+minio-data/
+postgres-data/
+redis-data/
+logs/
+
+# HuggingFace model cache
+hf-cache/
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
