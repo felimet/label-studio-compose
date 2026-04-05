@@ -1,0 +1,52 @@
+<!--
+  SAM3 Interactive Segmentation — Label Studio Labeling Config
+  ============================================================
+  Setup:
+  1. In Label Studio, create a new project
+  2. Go to Settings → Labeling Interface → Code
+  3. Paste this entire XML
+
+  Usage with SAM3 ML Backend:
+  - Enable auto-annotation: Settings → Machine Learning → Add Model
+    URL: http://sam3-ml-backend:9090
+  - In annotation view: click "Auto-Annotate" toggle
+  - Click on objects with "Object" label → positive prompt
+  - Click with "Background" label → negative prompt (exclude region)
+  - Draw a rectangle to define ROI for SAM3 → use RectangleLabels
+  - SAM3 returns BrushLabels mask automatically
+
+  Customise:
+  - Add more <Label> entries for multi-class segmentation
+  - Each label maps to a separate BrushLabels region
+-->
+<View>
+  <Header value="SAM3 Interactive Segmentation"/>
+  <Image
+    name="image"
+    value="$image"
+    zoom="true"
+    zoomControl="true"
+    rotateControl="false"
+  />
+
+  <!-- Output: pixel-level mask (Label Studio RLE format) -->
+  <BrushLabels name="tag" toName="image" strokeWidth="3">
+    <Label value="Object"     background="#FFA39E" showInline="true"/>
+    <Label value="Background" background="#D4F7A0" showInline="true"/>
+  </BrushLabels>
+
+  <!--
+    Interactive prompts — smart="true" triggers ML backend on each click.
+    "Object" → positive prompt (SAM label=1)
+    "Background" → negative prompt (SAM label=0)
+  -->
+  <KeyPointLabels name="kp" toName="image" smart="true">
+    <Label value="Object"     background="#FFA39E"/>
+    <Label value="Background" background="#D4F7A0"/>
+  </KeyPointLabels>
+
+  <!-- Rectangle prompt — SAM3 uses the box as a bounding constraint -->
+  <RectangleLabels name="rect" toName="image" smart="true">
+    <Label value="Object" background="#FFA39E"/>
+  </RectangleLabels>
+</View>

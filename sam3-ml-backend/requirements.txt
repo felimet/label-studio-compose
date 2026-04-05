@@ -1,0 +1,30 @@
+# ── PyTorch (CUDA 12.4 wheel) ────────────────────────────────
+# Without GPU (CI/local dev): change index-url to
+#   https://download.pytorch.org/whl/cpu
+--index-url https://download.pytorch.org/whl/cu124
+torch>=2.4.0,<2.8.0
+torchvision>=0.19.0
+
+# ── HuggingFace ──────────────────────────────────────────────
+# Pin to a version that includes Sam3TrackerModel / Sam3TrackerProcessor.
+# Verify: python -c "from transformers import Sam3TrackerModel"
+transformers>=4.57.0
+accelerate>=0.34.0
+safetensors>=0.4.0
+huggingface_hub>=0.27.0
+
+# ── Image processing ─────────────────────────────────────────
+Pillow>=10.3.0
+numpy>=1.26.0,<2.0.0
+
+# ── Label Studio SDK ─────────────────────────────────────────
+label-studio-ml>=1.0.9
+label-studio-sdk>=1.0.0
+# RLE encoding for BrushLabels (Label Studio custom format)
+label-studio-converter>=0.0.57
+
+# ── HTTP client ──────────────────────────────────────────────
+requests>=2.32.0
+
+# ── Server ───────────────────────────────────────────────────
+gunicorn>=22.0.0
