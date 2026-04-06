@@ -75,16 +75,6 @@
               maxSubmissions="1" showSubmitButton="true" editable="true"/>
   </View>
 
-  <!-- Track labels -->
-  <View className="sam3-section">
-    <HyperText name="h_labels" value="" className="sam3-label" inline="true">
-      <span title="為追蹤的物件貼上語意標籤（如 Object）。&#10;在 VideoRectangle 框選後從此處選取標籤。">Track Labels</span>
-    </HyperText>
-    <Labels name="videoLabels" toName="video" allowEmpty="true">
-      <Label value="Object" background="#11A39E"/>
-    </Labels>
-  </View>
-
   <!-- Prompt: bounding box on target frame → SAM3 tracks forward -->
   <View className="sam3-section">
     <HyperText name="h_box" value="" className="sam3-label" inline="true">
@@ -102,5 +92,15 @@
       <Label value="Object"     smart="true" background="#250dd3" showInline="true"/>
       <Label value="background" smart="true" background="#555555" showInline="true"/>
     </KeyPointLabels>
+  </View>
+
+  <!-- Track labels -->
+  <View className="sam3-section">
+    <HyperText name="h_labels" value="" className="sam3-label" inline="true">
+      <span title="為追蹤的物件貼上語意標籤（如 Object）。&#10;在 VideoRectangle 框選後從此處選取標籤。">Track Labels</span>
+    </HyperText>
+    <Labels name="videoLabels" toName="video" allowEmpty="true">
+      <Label value="Object" background="#11A39E"/>
+    </Labels>
   </View>
 </View>

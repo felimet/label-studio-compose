@@ -2,18 +2,20 @@
 
 Architecture
 ------------
-Model is loaded at **module scope** (singleton) — same reason as image backend.
+Same lazy-loading pattern as image backend — checkpoint downloaded at module
+scope, model loaded on first predict() via _ensure_loaded(), after gunicorn
+fork.  Do NOT use --preload.
 
 SAM3 video API (facebookresearch/sam3)
 ---------------------------------------
   predictor = Sam3VideoPredictorMultiGPU(checkpoint_path, use_fa3, ...)
 
   Session lifecycle per request:
-    resp = predictor.handle_request({"type": "start_session",
+    resp = _predictor.handle_request({"type": "start_session",
                                      "resource_path": video_path})
     session_id = resp["session_id"]
 
-    predictor.handle_request({"type": "add_prompt",
+    _predictor.handle_request({"type": "add_prompt",
                                "session_id": session_id,
                                "frame_index": 0,
                                "text": "optional text prompt",
@@ -25,7 +27,7 @@ SAM3 video API (facebookresearch/sam3)
                                "clear_old_boxes": False,
                                "clear_old_points": False})
 
-    for frame_data in predictor.handle_stream_request(
+    for frame_data in _predictor.handle_stream_request(
             {"type": "propagate_in_video",
              "session_id": session_id,
              "propagation_direction": "forward",
@@ -36,7 +38,7 @@ SAM3 video API (facebookresearch/sam3)
         # outputs["out_binary_masks"] ndarray [N, H, W] bool
         # outputs["out_boxes_xywh"]   ndarray [N, 4]    pixel
 
-    predictor.handle_request({"type": "close_session",
+    _predictor.handle_request({"type": "close_session",
                                "session_id": session_id})
 
 Key difference from SAM2
@@ -82,10 +84,12 @@ ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
 ENABLE_FA3: bool = os.getenv("SAM3_ENABLE_FA3", "false").lower() == "true"
 
 # ── CUDA optimisations ─────────────────────────────────────────────────────────
+# NOTE: Set TF32 flags unconditionally — ignored on pre-Ampere GPUs, safe to set.
+# Do NOT call torch.cuda.get_device_properties() here: that initialises CUDA in
+# the gunicorn master process before fork(), causing RuntimeError in every worker.
 if DEVICE == "cuda":
-    if torch.cuda.is_available() and torch.cuda.get_device_properties(0).major >= 8:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
 _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if DEVICE == "cuda" else None
 
@@ -146,44 +150,56 @@ except Exception as _hf_err:
         f"https://huggingface.co/{MODEL_ID}"
     ) from _hf_err
 
-# ── Model loading ──────────────────────────────────────────────────────────────
+# ── Lazy model loading ─────────────────────────────────────────────────────────
+# Same rationale as sam3-image: defer CUDA init to after gunicorn fork.
+_predictor = None
 _USING_SAM2_FALLBACK: bool = False
+_init_lock = threading.Lock()
 
-try:
-    from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU  # type: ignore[import]
 
-    logger.info("Loading SAM3 video predictor on %s …", DEVICE)
-    # Sam3VideoPredictor API: checkpoint_path, async_loading_frames, video_loader_type, compile.
-    # FA3 is controlled by the environment (GPU capability check in model_misc.py),
-    # not by constructor arguments — no use_fa3 flag exists in this version.
-    predictor = Sam3VideoPredictorMultiGPU(
-        checkpoint_path=_checkpoint_path,
-        async_loading_frames=True,
-        video_loader_type="cv2",    # internal cv2 frame loader — no manual splitting
-    )
-    logger.info("SAM3 video predictor loaded.")
+def _ensure_loaded() -> None:
+    """Load SAM3 (or SAM2 fallback) video predictor on first call inside the worker."""
+    global _predictor, _USING_SAM2_FALLBACK
+    if _predictor is not None:
+        return
+    with _init_lock:
+        if _predictor is not None:
+            return
 
-except ImportError as _sam3_err:
-    _USING_SAM2_FALLBACK = True
-    logger.warning(
-        "sam3 package import failed (%s) — falling back to SAM2 video predictor "
-        "bundled inside the sam3 source tree. "
-        "Text prompts (PCS) will be IGNORED.",
-        _sam3_err,
-    )
-    # SAM3 is installed from source at /sam3; SAM2 lives at /sam3/sam2/.
-    # We must add /sam3 to sys.path so that `import sam2` resolves correctly.
-    _sam3_src = "/sam3"
-    if _sam3_src not in sys.path:
-        sys.path.insert(0, _sam3_src)
-    from sam2.build_sam import build_sam2_video_predictor  # type: ignore[import]
+        # ── Reset CUDA state for forked workers (same as sam3-image) ─────
+        import torch.cuda as _cuda
+        _cuda._in_bad_fork = False
+        _cuda._initialized = False
 
-    predictor = build_sam2_video_predictor(
-        os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
-        _checkpoint_path,
-        device=DEVICE,
-    )
-    logger.info("SAM2 video predictor loaded (SAM3 fallback).")
+        try:
+            from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU  # type: ignore[import]
+
+            logger.info("Loading SAM3 video predictor on %s …", DEVICE)
+            _predictor = Sam3VideoPredictorMultiGPU(
+                checkpoint_path=_checkpoint_path,
+                async_loading_frames=True,
+                video_loader_type="cv2",
+            )
+            logger.info("SAM3 video predictor loaded.")
+
+        except ImportError as err:
+            _USING_SAM2_FALLBACK = True
+            logger.warning(
+                "sam3 package import failed (%s) — falling back to SAM2 video predictor. "
+                "Text prompts (PCS) will be IGNORED.",
+                err,
+            )
+            _sam3_src = "/sam3"
+            if _sam3_src not in sys.path:
+                sys.path.insert(0, _sam3_src)
+            from sam2.build_sam import build_sam2_video_predictor  # type: ignore[import]
+
+            _predictor = build_sam2_video_predictor(
+                os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
+                _checkpoint_path,
+                device=DEVICE,
+            )
+            logger.info("SAM2 video predictor loaded (SAM3 fallback).")
 
 
 
@@ -218,6 +234,8 @@ class NewModel(LabelStudioMLBase):
         context: Optional[Dict] = None,
         **kwargs,
     ) -> ModelResponse:
+
+        _ensure_loaded()  # CUDA init deferred to worker process (after gunicorn fork)
 
         from_name, to_name, value = self.get_first_tag_occurence("VideoRectangle", "Video")
 
@@ -345,7 +363,7 @@ class NewModel(LabelStudioMLBase):
         start_frame = min((p["frame_idx"] for p in geo_prompts), default=0)
 
         # Open session — SAM3 handles internal frame loading via cv2
-        resp = predictor.handle_request({
+        resp = _predictor.handle_request({
             "type":          "start_session",
             "resource_path": video_path,
         })
@@ -405,7 +423,7 @@ class NewModel(LabelStudioMLBase):
                 if not by_obj:
                     # Dimension probe failed; still send text prompt if available.
                     if text_prompt and ENABLE_PCS and frame_prompts:
-                        predictor.handle_request({
+                        _predictor.handle_request({
                             "type":             "add_prompt",
                             "session_id":       session_id,
                             "frame_index":      frame_idx,
@@ -441,13 +459,13 @@ class NewModel(LabelStudioMLBase):
                     if pts:
                         req["points"]       = pts
                         req["point_labels"] = lbs
-                    predictor.handle_request(req)
+                    _predictor.handle_request(req)
 
             # Propagate forward from the last prompted frame
             last_frame = max(p["frame_idx"] for p in geo_prompts)
             sequence: list[dict] = []
 
-            for frame_data in predictor.handle_stream_request({
+            for frame_data in _predictor.handle_stream_request({
                 "type":                   "propagate_in_video",
                 "session_id":             session_id,
                 "propagation_direction":  "forward",
@@ -472,7 +490,7 @@ class NewModel(LabelStudioMLBase):
                             "time":     (frame_idx - start_frame) / fps,
                         })
         finally:
-            predictor.handle_request({
+            _predictor.handle_request({
                 "type":       "close_session",
                 "session_id": session_id,
             })
@@ -523,8 +541,8 @@ class NewModel(LabelStudioMLBase):
             height, width, _ = first_img.shape
 
             # Per-request state — no shared cache (not thread-safe with THREADS > 1)
-            inference_state = predictor.init_state(video_path=frame_dir)
-            predictor.reset_state(inference_state)
+            inference_state = _predictor.init_state(video_path=frame_dir)
+            _predictor.reset_state(inference_state)
 
             # ── Build per-(frame, obj_id) point buckets ────────────────────
             # Boxes → converted to 5-point representation via _rect_to_keypoints.
@@ -567,7 +585,7 @@ class NewModel(LabelStudioMLBase):
             for (frame_idx, obj_id), data in sorted(by_frame_obj.items()):
                 if not data["pts"]:
                     continue
-                predictor.add_new_points(
+                _predictor.add_new_points(
                     inference_state=inference_state,
                     frame_idx=frame_idx,
                     obj_id=obj_id_map[obj_id],
@@ -576,7 +594,7 @@ class NewModel(LabelStudioMLBase):
                 )
 
             sequence: list[dict] = []
-            for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
+            for out_frame_idx, out_obj_ids, out_mask_logits in _predictor.propagate_in_video(
                 inference_state=inference_state,
                 start_frame_idx=last_frame,
                 max_frame_num_to_track=MAX_FRAMES_TO_TRACK,

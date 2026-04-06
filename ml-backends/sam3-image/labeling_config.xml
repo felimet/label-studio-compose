@@ -76,16 +76,6 @@
               maxSubmissions="1" showSubmitButton="true" editable="true"/>
   </View>
 
-  <!-- Output: SAM3 segmentation mask -->
-  <View className="sam3-section">
-    <HyperText name="h_output" value="" className="sam3-label" inline="true">
-      <span title="SAM3 自動生成的分割遮罩（RLE 格式）。&#10;無需手動操作，由 Keypoint 或 Box Prompt 觸發後自動填入。">Output — Segmentation Mask</span>
-    </HyperText>
-    <BrushLabels name="brush" toName="image">
-      <Label value="Object" background="#FFA39E"/>
-    </BrushLabels>
-  </View>
-
   <!-- Prompt: positive / negative keypoints -->
   <View className="sam3-section">
     <HyperText name="h_kp" value="" className="sam3-label" inline="true">
@@ -105,5 +95,15 @@
     <RectangleLabels name="rect" toName="image" smart="true">
       <Label value="Object" background="#FFC069" showInline="true"/>
     </RectangleLabels>
+  </View>
+
+  <!-- Output: SAM3 segmentation mask -->
+  <View className="sam3-section">
+    <HyperText name="h_output" value="" className="sam3-label" inline="true">
+      <span title="SAM3 自動生成的分割遮罩（RLE 格式）。&#10;無需手動操作，由 Keypoint 或 Box Prompt 觸發後自動填入。">Output — Segmentation Mask</span>
+    </HyperText>
+    <BrushLabels name="brush" toName="image" smart="true">
+      <Label value="Object" background="#FFA39E"/>
+    </BrushLabels>
   </View>
 </View>

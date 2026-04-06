@@ -2,9 +2,11 @@
 
 Architecture
 ------------
-Model is loaded at **module scope** (singleton) because label_studio_ml.api
-creates a new MODEL_CLASS instance on every /predict request — keeping the
-model in setup() would re-download / re-load on every call.
+Checkpoint is downloaded at module scope, but the model is loaded **lazily**
+via _ensure_loaded() on the first predict() call — inside each gunicorn worker
+process, after fork().  This avoids CUDA initialisation in the master process
+which causes "Cannot re-initialize CUDA in forked subprocess" in all workers.
+Do NOT use gunicorn --preload; it loads the app in the master before fork.
 
 SAM3 image API (facebookresearch/sam3)
 ---------------------------------------
@@ -61,10 +63,14 @@ CONFIDENCE_THRESHOLD: float = float(os.getenv("SAM3_CONFIDENCE_THRESHOLD", "0.5"
 RETURN_ALL_MASKS: bool = os.getenv("SAM3_RETURN_ALL_MASKS", "false").lower() == "true"
 
 # ── CUDA optimisations ─────────────────────────────────────────────────────────
+# NOTE: Set TF32 flags unconditionally — ignored on pre-Ampere GPUs, safe to set.
+# Do NOT call torch.cuda.get_device_properties() here: that initialises CUDA in
+# the gunicorn master process. After fork(), PyTorch raises
+#   "Cannot re-initialize CUDA in forked subprocess"
+# in every worker. All CUDA initialisation must be deferred until after fork.
 if DEVICE == "cuda":
-    if torch.cuda.is_available() and torch.cuda.get_device_properties(0).major >= 8:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
 # autocast context reused per inference call (module-scope context managers are
 # not safe across fork — enter/exit is done inside _predict_sam3/_predict_sam2)
@@ -127,52 +133,81 @@ except Exception as _hf_err:
         f"https://huggingface.co/{MODEL_ID}"
     ) from _hf_err
 
-# ── Model loading ──────────────────────────────────────────────────────────────
+# ── Lazy model loading ─────────────────────────────────────────────────────────
+# Model is NOT loaded at module scope. Loading here initialises CUDA in the
+# gunicorn master process; after fork() every worker fails with:
+#   RuntimeError: Cannot re-initialize CUDA in forked subprocess.
+# _ensure_loaded() is called at the start of predict() — i.e. inside the worker
+# process, after gunicorn has already forked. CUDA is then initialised cleanly
+# in each worker.
+_processor = None
 _USING_SAM2_FALLBACK: bool = False
+_init_lock = threading.Lock()
 
-try:
-    from sam3.model_builder import build_sam3_image_model           # type: ignore[import]
-    from sam3.model.sam3_image_processor import Sam3Processor       # type: ignore[import]
 
-    logger.info("Loading SAM3 image model on %s …", DEVICE)
-    _sam_model = build_sam3_image_model(
-        checkpoint_path=_checkpoint_path,
-        device=DEVICE,
-        eval_mode=True,
-        enable_segmentation=True,
-        enable_inst_interactivity=False,
-        compile=False,
-    )
-    processor = Sam3Processor(
-        _sam_model,
-        resolution=1008,
-        device=DEVICE,
-        confidence_threshold=CONFIDENCE_THRESHOLD,
-    )
-    logger.info("SAM3 image model loaded (PCS enabled=%s).", ENABLE_PCS)
+def _ensure_loaded() -> None:
+    """Load SAM3 (or SAM2 fallback) model on first call inside the worker process."""
+    global _processor, _USING_SAM2_FALLBACK
+    if _processor is not None:
+        return
+    with _init_lock:
+        if _processor is not None:
+            return
 
-except ImportError as _sam3_err:
-    _USING_SAM2_FALLBACK = True
-    logger.warning(
-        "sam3 package import failed (%s) — falling back to SAM2ImagePredictor "
-        "bundled inside the sam3 source tree. "
-        "Text prompts (PCS) will be IGNORED.",
-        _sam3_err,
-    )
-    # SAM3 is installed from source at /sam3; SAM2 lives at /sam3/sam2/.
-    _sam3_src = "/sam3"
-    if _sam3_src not in sys.path:
-        sys.path.insert(0, _sam3_src)
-    from sam2.build_sam import build_sam2                           # type: ignore[import]
-    from sam2.sam2_image_predictor import SAM2ImagePredictor        # type: ignore[import]
+        # ── Reset CUDA state for forked workers ──────────────────────────
+        # gunicorn --preload loads the Flask app in the master process.
+        # If any transitive import initialises CUDA there, PyTorch marks
+        # every forked worker as unsafe (_in_bad_fork = True).  Resetting
+        # these flags allows the worker to initialise a fresh CUDA context.
+        # Safe because CUDA contexts are per-process and not inherited
+        # across fork — the worker must re-initialise from scratch anyway.
+        import torch.cuda as _cuda
+        _cuda._in_bad_fork = False
+        _cuda._initialized = False
 
-    _sam2_model = build_sam2(
-        os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
-        _checkpoint_path,
-        device=DEVICE,
-    )
-    processor = SAM2ImagePredictor(_sam2_model)  # type: ignore[assignment]
-    logger.info("SAM2 image predictor loaded (SAM3 fallback).")
+        try:
+            from sam3.model_builder import build_sam3_image_model           # type: ignore[import]
+            from sam3.model.sam3_image_processor import Sam3Processor       # type: ignore[import]
+
+            logger.info("Loading SAM3 image model on %s …", DEVICE)
+            _sam_model = build_sam3_image_model(
+                checkpoint_path=_checkpoint_path,
+                device=DEVICE,
+                eval_mode=True,
+                enable_segmentation=True,
+                enable_inst_interactivity=False,
+                compile=False,
+            )
+            _processor = Sam3Processor(
+                _sam_model,
+                resolution=1008,
+                device=DEVICE,
+                confidence_threshold=CONFIDENCE_THRESHOLD,
+            )
+            logger.info("SAM3 image model loaded (PCS enabled=%s).", ENABLE_PCS)
+
+        except ImportError as err:
+            _USING_SAM2_FALLBACK = True
+            logger.warning(
+                "sam3 package import failed (%s) — falling back to SAM2ImagePredictor "
+                "bundled inside the sam3 source tree. "
+                "Text prompts (PCS) will be IGNORED.",
+                err,
+            )
+            # SAM3 is installed from source at /sam3; SAM2 lives at /sam3/sam2/.
+            _sam3_src = "/sam3"
+            if _sam3_src not in sys.path:
+                sys.path.insert(0, _sam3_src)
+            from sam2.build_sam import build_sam2                           # type: ignore[import]
+            from sam2.sam2_image_predictor import SAM2ImagePredictor        # type: ignore[import]
+
+            _sam2_model = build_sam2(
+                os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
+                _checkpoint_path,
+                device=DEVICE,
+            )
+            _processor = SAM2ImagePredictor(_sam2_model)                   # type: ignore[assignment]
+            logger.info("SAM2 image predictor loaded (SAM3 fallback).")
 
 
 # ── Backend ────────────────────────────────────────────────────────────────────
@@ -205,6 +240,8 @@ class NewModel(LabelStudioMLBase):
         **kwargs,
     ) -> ModelResponse:
         """Return BrushLabels prediction(s) for the given prompt context."""
+
+        _ensure_loaded()  # CUDA init deferred to worker process (after gunicorn fork)
 
         from_name, to_name, value = self.get_first_tag_occurence("BrushLabels", "Image")
 
@@ -271,6 +308,12 @@ class NewModel(LabelStudioMLBase):
 
         has_text = ENABLE_PCS and text_prompt is not None and not _USING_SAM2_FALLBACK
         has_geo  = bool(point_coords) or input_box is not None
+
+        # Text-only path: no geometric context → selected_label stays None.
+        # Default to the first BrushLabels label so the mask gets a visible colour.
+        if selected_label is None:
+            brush_labels = self.parsed_label_config.get(from_name, {}).get("labels", [])
+            selected_label = brush_labels[0] if brush_labels else "Object"
 
         if not has_text and not has_geo:
             if text_prompt and _USING_SAM2_FALLBACK:
@@ -353,14 +396,14 @@ class NewModel(LabelStudioMLBase):
         from_name: str,
         to_name: str,
     ) -> ModelResponse:
-        state = processor.set_image(Image.fromarray(image))  # type: ignore[attr-defined]
+        state = _processor.set_image(Image.fromarray(image))  # type: ignore[attr-defined]
 
         has_text = text_prompt is not None
 
         # Text prompt (PCS)
         if has_text:
             assert text_prompt is not None
-            state = processor.set_text_prompt(prompt=text_prompt, state=state)  # type: ignore[attr-defined]
+            state = _processor.set_text_prompt(prompt=text_prompt, state=state)  # type: ignore[attr-defined]
 
         # Geometric prompts
         # Sam3Processor.add_geometric_prompt() expects:
@@ -372,7 +415,7 @@ class NewModel(LabelStudioMLBase):
             cy = ((y0 + y1) / 2.0) / image_height
             w  = (x1 - x0) / image_width
             h  = (y1 - y0) / image_height
-            state = processor.add_geometric_prompt(  # type: ignore[attr-defined]
+            state = _processor.add_geometric_prompt(  # type: ignore[attr-defined]
                 box=[cx, cy, w, h], label=True, state=state,
             )
 
@@ -383,7 +426,7 @@ class NewModel(LabelStudioMLBase):
             eps_y = 0.005
             cx = px / image_width
             cy = py / image_height
-            state = processor.add_geometric_prompt(  # type: ignore[attr-defined]
+            state = _processor.add_geometric_prompt(  # type: ignore[attr-defined]
                 box=[cx, cy, eps_x * 2, eps_y * 2],
                 label=bool(lbl),
                 state=state,
@@ -472,13 +515,13 @@ class NewModel(LabelStudioMLBase):
         from_name: str,
         to_name: str,
     ) -> ModelResponse:
-        processor.set_image(image)  # type: ignore[attr-defined]
+        _processor.set_image(image)  # type: ignore[attr-defined]
 
         np_points = np.array(point_coords, dtype=np.float32) if point_coords else None
         np_labels = np.array(point_labels, dtype=np.float32) if point_labels else None
         np_box    = np.array(input_box,    dtype=np.float32) if input_box    else None
 
-        masks, scores, _ = processor.predict(  # type: ignore[attr-defined]
+        masks, scores, _ = _processor.predict(  # type: ignore[attr-defined]
             point_coords=np_points,
             point_labels=np_labels,
             box=np_box,
