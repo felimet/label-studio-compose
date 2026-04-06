@@ -213,22 +213,24 @@ docker compose logs label-studio 2>&1 | jq 'select(.level=="ERROR")'
 
 ### Data volumes
 
+所有資料目錄已使用 bind mount，直接存在專案根目錄，可用一般檔案工具備份。
+
 ```bash
-# Label Studio media / exports (bind mount — already on host)
+# Label Studio 標注資料 + Local files
 tar -czf ls-data-$(date +%Y%m%d).tar.gz ./label-studio-data/
 
-# PostgreSQL
+# PostgreSQL — 必須用 pg_dump（postgres-data/ 是內部格式，直接複製無法還原）
 docker compose exec db pg_dump -U labelstudio labelstudio \
   > backup-$(date +%Y%m%d).sql
 
-# MinIO (via mc mirror)
-docker compose exec minio mc mirror local/label-studio-bucket /backup/minio/
+# MinIO 媒體檔案
+tar -czf minio-data-$(date +%Y%m%d).tar.gz ./minio-data/
 ```
 
 ### Exclude from backup
 
-- `redis-data` — ephemeral task queue; tasks re-queued on restart
-- `hf-cache`, `sam3-image-models`, `sam3-video-models` — re-downloadable from HuggingFace
+- `redis-data/` — 任務佇列暫存，重啟後自動恢復，不需備份
+- `hf-cache`, `sam3-image-models`, `sam3-video-models` — 可從 HuggingFace 重新下載
 
 ## Monitoring
 

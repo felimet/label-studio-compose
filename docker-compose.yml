@@ -25,7 +25,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-data:/var/lib/postgresql/data
       - ./postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio} -d ${POSTGRES_DB:-labelstudio}"]
@@ -47,7 +47,7 @@ services:
       --appendonly yes
       --appendfsync everysec
     volumes:
-      - redis-data:/data
+      - ./redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -74,7 +74,7 @@ services:
       # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
       - MINIO_API_CORS_ALLOW_ORIGIN=*
     volumes:
-      - minio-data:/data
+      - ./minio-data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 15s
@@ -202,9 +202,6 @@ services:
       - internal
 
 volumes:
-  postgres-data:
-  redis-data:
-  minio-data:
 
 networks:
   internal:

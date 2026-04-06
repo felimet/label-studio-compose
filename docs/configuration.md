@@ -135,26 +135,47 @@ openssl rand -hex 32
 openssl rand -base64 24
 ```
 
+## 資料目錄說明
+
+<!-- AUTO-GENERATED from docker-compose.yml volumes -->
+所有資料均以 bind mount 方式存在專案根目錄，重裝系統或搬機時直接複製資料夾即可：
+
+| 目錄 | 對應服務 | 內容 | 備份方式 |
+|------|----------|------|----------|
+| `./label-studio-data/` | label-studio | 標注資料、匯出檔、Local files | 直接 `tar` 壓縮 |
+| `./postgres-data/` | db | 資料庫（PostgreSQL 內部格式）| **必須用 `pg_dump`**，不可直接複製 |
+| `./minio-data/` | minio | 上傳的影像、影片等媒體檔案 | 直接 `tar` 壓縮 |
+| `./redis-data/` | redis | 任務佇列暫存（重啟後自動恢復）| 通常不需備份 |
+<!-- END AUTO-GENERATED -->
+
+> `postgres-data/` 是 PostgreSQL 的二進位內部格式，**直接複製無法還原**。備份請用 `pg_dump`（見 [Runbook → Backup](RUNBOOK.md#backup)）。
+
 ## 從舊版 Named Volume 遷移到 Bind Mount
 
-若先前已用預設 named volume 跑過 stack，切換到 `./label-studio-data` bind mount 前需手動搬資料：
+若先前已用 Docker named volume 跑過 stack，切換前需手動搬資料：
 
 ```bash
-# 1. 匯出舊 volume 內容
-docker compose cp label-studio:/label-studio/data/. ./label-studio-data/
-
-# Linux / WSL — 確保 appuser（UID 1001）可寫入
-sudo chown -R 1001:1001 label-studio-data
-
-# 2. 停止 stack 並移除舊 named volume
 docker compose down
-docker volume rm label-studio_label-studio-data   # 名稱視 project name 而定
 
-# 3. 建立 Local files 子目錄（若不存在）
+# Label Studio 媒體資料
+docker compose cp label-studio:/label-studio/data/. ./label-studio-data/
 mkdir -p label-studio-data/file
 
-# 4. 重啟
+# PostgreSQL（直接複製二進位檔案）
+docker run --rm \
+  -v label-studio_postgres-data:/src \
+  -v "$(pwd)/postgres-data:/dst" \
+  alpine sh -c "cp -a /src/. /dst/"
+
+# MinIO 媒體檔案
+docker run --rm \
+  -v label-studio_minio-data:/src \
+  -v "$(pwd)/minio-data:/dst" \
+  alpine sh -c "cp -a /src/. /dst/"
+
+# redis-data 不需遷移（任務佇列重啟後自動恢復）
+
 docker compose up -d
 ```
 
-> **⚠️ 風險提示**：`docker volume rm` 前務必確認資料已完整複製到 `./label-studio-data`。Windows Docker Desktop 不受 chown 影響，可略過步驟 2。
+> Windows Docker Desktop 不需要 `chown`，可略過 Linux/WSL 的權限相關步驟。

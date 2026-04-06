@@ -40,7 +40,7 @@ Use `labeling_config.xml` as your project's labeling interface.
 | Variable | Default | Description |
 |---|---|---|
 | `SAM3_MODEL_ID` | `facebook/sam3.1` | HuggingFace model ID |
-| `SAM3_CHECKPOINT_FILENAME` | `sam3.1.pt` | Checkpoint filename on HF |
+| `SAM3_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | Checkpoint filename on HF |
 | `MODEL_DIR` | `/data/models` | Local checkpoint cache directory |
 | `DEVICE` | `cuda` | `cuda` or `cpu` |
 | `HF_TOKEN` | — | HuggingFace access token (required for gated model) |
