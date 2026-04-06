@@ -148,14 +148,16 @@ services:
       - LABEL_STUDIO_ENABLE_LEGACY_API_TOKEN=true
       # Security
       - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
-      # Initial admin (only used on first run)
-      - DEFAULT_USERNAME=${LABEL_STUDIO_USERNAME:-admin@example.com}
-      - DEFAULT_USER_PASSWORD=${LABEL_STUDIO_PASSWORD:-admin_ps_example}
+      # Initial admin (only used on first run against an empty DB).
+      # get_env('USERNAME') → tries LABEL_STUDIO_USERNAME first (see core/utils/params.py)
+      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME}
+      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD}
       # Logging
       - DJANGO_LOG_LEVEL=WARNING
       - LOG_LEVEL=WARNING
     volumes:
       - ./label-studio-data:/label-studio/data
+      - ./label-studio-data/file:/label-studio/data/file:rw
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s

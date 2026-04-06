@@ -26,7 +26,8 @@ Individual service health endpoints:
 cp .env.example .env
 # Fill in all <PLACEHOLDER> values — see docs/configuration.md
 # Generate secrets:
-openssl rand -hex 32    # LABEL_STUDIO_SECRET_KEY, LABEL_STUDIO_USER_TOKEN
+openssl rand -hex 32    # LABEL_STUDIO_SECRET_KEY
+openssl rand -hex 20    # LABEL_STUDIO_USER_TOKEN  ← must be ≤40 chars; hex 32 (64 chars) breaks first-boot
 openssl rand -base64 24 # POSTGRES_PASSWORD, REDIS_PASSWORD, MINIO_ROOT_PASSWORD
 
 docker compose up -d
