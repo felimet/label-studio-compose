@@ -42,7 +42,7 @@
 | `LABEL_STUDIO_USERNAME` | `admin@example.com` | 初始管理員 Email |
 | `LABEL_STUDIO_PASSWORD` | — | 初始管理員密碼 |
 | `LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK` | `true` | 關閉公開註冊（需邀請連結） |
-| `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` | `/label-studio/data/file` | Local files storage 根目錄；須為 `./label-studio-data` 的子路徑（容器內 `/label-studio/data/file`） |
+| `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` | `/label-studio/data/file` | Local files storage 根目錄（**容器內路徑**）。host 目錄 `./label-studio-data/file` 透過 volume mount 對應至此路徑，填入 UI 時也須用容器內路徑 |
 | `LABEL_STUDIO_USER_TOKEN` | `openssl rand -hex 32` | 首次啟動時寫入 admin 的 legacy API token；**僅首次生效**（見下方說明） |
 | `DATA_UPLOAD_MAX_NUMBER_FILES` | `100000` | Django 上傳檔案數上限；預設 100 過低，修復 [issue #6777](https://github.com/HumanSignal/label-studio/issues/6777) |
 | `JSON_LOG` | `1` | 輸出結構化 JSON log；LS 原始碼支援但官方文件未列 |
@@ -140,12 +140,13 @@ openssl rand -base64 24
 <!-- AUTO-GENERATED from docker-compose.yml volumes -->
 所有資料均以 bind mount 方式存在專案根目錄，重裝系統或搬機時直接複製資料夾即可：
 
-| 目錄 | 對應服務 | 內容 | 備份方式 |
-|------|----------|------|----------|
-| `./label-studio-data/` | label-studio | 標注資料、匯出檔、Local files | 直接 `tar` 壓縮 |
-| `./postgres-data/` | db | 資料庫（PostgreSQL 內部格式）| **必須用 `pg_dump`**，不可直接複製 |
-| `./minio-data/` | minio | 上傳的影像、影片等媒體檔案 | 直接 `tar` 壓縮 |
-| `./redis-data/` | redis | 任務佇列暫存（重啟後自動恢復）| 通常不需備份 |
+| 目錄（host） | 容器內路徑 | 對應服務 | 內容 | 備份方式 |
+|-------------|-----------|----------|------|----------|
+| `./label-studio-data/` | `/label-studio/data/` | label-studio | 標注資料、匯出檔 | 直接 `tar` 壓縮 |
+| `./label-studio-data/file/` | `/label-studio/data/file/` | label-studio | Local files storage 根目錄；UI 中填容器內路徑（如 `/label-studio/data/file/1`） | 直接 `tar` 壓縮 |
+| `./postgres-data/` | `/var/lib/postgresql/data/` | db | 資料庫（PostgreSQL 內部格式）| **必須用 `pg_dump`**，不可直接複製 |
+| `./minio-data/` | `/data/` | minio | 上傳的影像、影片等媒體檔案 | 直接 `tar` 壓縮 |
+| `./redis-data/` | `/data/` | redis | 任務佇列暫存（重啟後自動恢復）| 通常不需備份 |
 <!-- END AUTO-GENERATED -->
 
 > `postgres-data/` 是 PostgreSQL 的二進位內部格式，**直接複製無法還原**。備份請用 `pg_dump`（見 [Runbook → Backup](RUNBOOK.md#backup)）。
