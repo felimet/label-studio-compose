@@ -77,6 +77,8 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 ## SAM3 ML 後端
 
 <!-- AUTO-GENERATED from .env.ml.example + docker-compose.ml.yml -->
+**Last Updated:** 2026-04-06
+
 > 所有 SAM3 變數定義於 `.env.ml`（從 `.env.ml.example` 複製後填入）。
 > `docker-compose.ml.yml` 透過 `env_file: .env.ml` 載入；`environment:` 區塊僅含靜態值（URL、路徑、port）。
 
@@ -94,6 +96,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 | `SAM3_MODEL_ID` | `facebook/sam3.1` | HuggingFace Hub 模型 ID（影像與影片後端共用） |
 | `SAM3_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | 模型 checkpoint 檔名（與 `SAM3_MODEL_ID` 配對，約 3.5 GB） |
 | `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援，極慢）。CUDA 需 NVIDIA driver ≥ 535.x |
+| `MODEL_DIR` | `/data/models` | 容器內模型 checkpoint 的快取目錄。由 `docker-compose.ml.yml` 靜態設定（`sam3-image-models` / `sam3-video-models` Volume 掛載至此），通常不需修改 |
 
 ### 影片後端設定
 
@@ -135,8 +138,8 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 ### 說明
 
-- 兩個後端各自維護獨立的 `sam3-image-models` / `sam3-video-models` Volume 儲存下載的權重。
-- 共用 `hf-cache` Volume（`/home/appuser/.cache/huggingface`）避免重複下載 HF 元資料。
+- 兩個後端各自維護獨立的 `sam3-image-models` / `sam3-video-models` Volume 儲存下載的權重（均掛載至容器內 `/data/models`）。
+- 共用 `hf-cache` Volume（掛載至 `/root/.cache/huggingface`）避免重複下載 HF 元資料。
 - 首次啟動下載約 3.5 GB 權重；健康檢查設 `start_period: 300s` 留足緩衝。
 
 ## 產生強密碼

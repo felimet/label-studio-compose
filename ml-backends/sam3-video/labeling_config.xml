@@ -1,17 +1,106 @@
 <!--
   SAM3 Video Segmentation — Label Studio Labeling Config
   ======================================================
-  Prompts:
-    - VideoRectangle: 在第一個畫格拉一個矩形框 → 觸發 SAM3 追蹤
+  Prompts (可組合使用，觸發 smart predict):
+    - VideoRectangle : 在目標畫格拉矩形框 → SAM3 向前追蹤
+    - KeyPointLabels : 正向點 (Object) / 負向點 (background) → 點 prompt
+    - TextArea       : 文字 prompt → SAM3 PCS open-vocabulary 追蹤
 
   Label name note:
     Label name (e.g., "car", "person") is used as SAM3 text concept prompt.
     framerate must match your actual video FPS.
+    SAM3 不可用時（SAM2 fallback）文字 prompt 會被忽略。
 -->
 <View>
-  <Labels name="videoLabels" toName="video" allowEmpty="true">
-    <Label value="Object" background="#11A39E"/>
-  </Labels>
+  <Style>
+    .sam3-section {
+      background: #2a2a2a;
+      border: 1px solid #3d3d3d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    }
+    .sam3-label span {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px dashed #555;
+      cursor: help;
+      position: relative;
+    }
+    .sam3-label span[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      left: 0;
+      top: calc(100% + 4px);
+      background: #1e1e1e;
+      color: #ccc;
+      padding: 8px 10px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      font-size: 11px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: pre-line;
+      text-align: left;
+      width: 280px;
+      z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    /* Loading indicator while SAM3 is running */
+    .lsf-main-content.lsf-requesting .sam3-hint span::after {
+      content: " ⏳ Running SAM3…";
+      color: #666;
+      font-size: 11px;
+      font-style: italic;
+      text-transform: none;
+      border-bottom: none;
+    }
+  </Style>
+
   <Video name="video" value="$video" framerate="25.0"/>
-  <VideoRectangle name="box" toName="video" smart="true"/>
+
+  <!-- Optional: text prompt -->
+  <View className="sam3-section">
+    <HyperText name="h_text" value="" className="sam3-label sam3-hint" inline="true">
+      <span title="輸入概念文字後按 Submit，直接觸發 SAM3 text-only predict。&#10;&#10;也可搭配 Box / Keypoint Prompt 一起使用（mixed mode）。&#10;&#10;⚠ SAM2 fallback 時文字 prompt 無效，需搭配 Box / KP。">Text Prompt (optional)</span>
+    </HyperText>
+    <TextArea name="text_prompt" toName="video"
+              placeholder="e.g. car, person, tree"
+              perRegion="false" rows="1"
+              maxSubmissions="1" showSubmitButton="true" editable="true"/>
+  </View>
+
+  <!-- Track labels -->
+  <View className="sam3-section">
+    <HyperText name="h_labels" value="" className="sam3-label" inline="true">
+      <span title="為追蹤的物件貼上語意標籤（如 Object）。&#10;在 VideoRectangle 框選後從此處選取標籤。">Track Labels</span>
+    </HyperText>
+    <Labels name="videoLabels" toName="video" allowEmpty="true">
+      <Label value="Object" background="#11A39E"/>
+    </Labels>
+  </View>
+
+  <!-- Prompt: bounding box on target frame → SAM3 tracks forward -->
+  <View className="sam3-section">
+    <HyperText name="h_box" value="" className="sam3-label" inline="true">
+      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 在目標畫格拖拉矩形框住物件。&#10;3. SAM3 自動向前追蹤至&#10;   MAX_FRAMES_TO_TRACK 張畫格。">Box Prompt</span>
+    </HyperText>
+    <VideoRectangle name="box" toName="video" smart="true"/>
+  </View>
+
+  <!-- Prompt: positive / negative keypoints on target frame -->
+  <View className="sam3-section">
+    <HyperText name="h_kp" value="" className="sam3-label" inline="true">
+      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 選 Object（正向）或 background（負向）。&#10;3. 點擊目標畫格上的位置。&#10;&#10;與 Box Prompt 組合使用效果更佳。">Keypoint Prompt</span>
+    </HyperText>
+    <KeyPointLabels name="kp" toName="video" smart="true">
+      <Label value="Object"     smart="true" background="#250dd3" showInline="true"/>
+      <Label value="background" smart="true" background="#555555" showInline="true"/>
+    </KeyPointLabels>
+  </View>
 </View>

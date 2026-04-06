@@ -69,17 +69,20 @@ Settings → Labeling Interface → Code → 貼上 XML
 ### Predict 路徑
 
 <!-- AUTO-GENERATED from ml-backends/sam3-image/model.py -->
+**Last Updated:** 2026-04-06
+
 三條路徑依序判斷，並可任意組合：
 
-| 路徑 | 觸發條件 | 說明 |
-|------|----------|------|
-| **純文字（PCS）** | 只有 TextArea，無幾何提示 | `set_text_prompt()` → N 個實例遮罩 |
-| **混合** | TextArea + 幾何提示 | `set_text_prompt()` 再 `add_geometric_prompt()` |
-| **純幾何** | 只有 KeyPoint / Rectangle | `add_geometric_prompt()` 一或多次 |
-| **SAM2 fallback** | sam3 package 未安裝 | 文字提示忽略；幾何→ `SAM2ImagePredictor.predict()` |
+| 路徑 | 觸發條件 | SAM3 呼叫 | 說明 |
+|------|----------|-----------|------|
+| **混合（優先）** | TextArea + 幾何提示（KeyPoint / Rectangle） | `set_text_prompt()` → `add_geometric_prompt()` | 文字概念約束 + 幾何定位，最精確 |
+| **純文字（PCS）** | 只有 TextArea，無幾何提示 | `set_text_prompt()` | 回傳 N 個概念實例遮罩；影像尺寸從 PIL 推導 |
+| **純幾何** | 只有 KeyPoint / Rectangle，無 TextArea | `add_geometric_prompt()` 一或多次 | 模型自動補 `'visual'` 虛擬文字；等同 SAM2 行為 |
+| **SAM2 fallback** | `sam3` package 未安裝（import 失敗） | `SAM2ImagePredictor.predict()` | 文字提示記 WARNING 並被忽略；幾何提示仍可用 |
+
+> **Points 的限制**：`Sam3Processor.add_geometric_prompt()` 僅接受 box，不接受點。點提示以邊長 ±0.5% 影像尺寸的微小 box 代替（`eps_x = eps_y = 0.005`），正向/負向透過 `label=True/False` 傳遞。
 <!-- END AUTO-GENERATED -->
 
-> **Points 的限制**：`Sam3Processor.add_geometric_prompt()` 僅接受 box，不接受點。點提示以邊長 1% 影像的微小 box 代替（正向/負向透過 `label=True/False` 傳遞）。
 
 ### 推論流程（image）
 
@@ -107,38 +110,45 @@ Label Studio（渲染遮罩覆蓋層）
 
 ### 標注配置（video）
 
-```xml
-<View>
-  <Labels name="videoLabels" toName="video" allowEmpty="true">
-    <Label value="Person"/>
-    <Label value="Vehicle"/>
-  </Labels>
-  <Video name="video" value="$video" framerate="25.0"/>
-  <VideoRectangle name="box" toName="video" smart="true"/>
-  <TextArea name="text_prompt" toName="video" maxSubmissions="1" editable="true"/>
-</View>
+將 [ml-backends/sam3-video/labeling_config.xml](../ml-backends/sam3-video/labeling_config.xml) 匯入專案：
+
 ```
+Settings → Labeling Interface → Code → 貼上 XML
+```
+
+| 控制項 | 類型 | 用途 |
+|--------|------|------|
+| `<TextArea name="text_prompt">` | 文字提示 | PCS 自然語言提示（純 SAM3 功能） |
+| `<Labels name="videoLabels">` | 追蹤標籤 | 為追蹤物件指派語意標籤 |
+| `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框，SAM3 向前追蹤 |
+| `<KeyPointLabels name="kp" smart="true">` | 點擊提示 | 正向（Object）或負向（background）點 |
 
 ### 推論流程（video）
 
 ```
-Label Studio（使用者在影格 N 畫框，可選填文字）
-    │  POST /predict  { task, context: {videorectangle, textarea?} }
+Label Studio（使用者在影格 N 畫框或點擊，可選填文字）
+    │  POST /predict  { task, context: {videorectangle?, keypointlabels?, textarea?} }
     ▼
 NewModel.predict()
     ├── get_local_path()                      ← 下載影片
-    ├── _get_geo_prompts()                    ← VideoRectangle sequence → [{frame_idx, x_pct…}]
+    ├── _get_geo_prompts()                    ← VideoRectangle sequence → [{type:"box", frame_idx, x_pct…}]
+    │                                            KeyPointLabels → [{type:"point", frame_idx, x_pct, is_positive…}]
     ├── _get_text_prompt()                    ← TextArea → str（可選）
     ├── _predict_sam3()
     │    ├── torch.autocast(bfloat16) context 包裹
     │    ├── cv2.VideoCapture → 取得 vid_w/vid_h（百分比 → 像素換算）
     │    ├── handle_request({ type: "start_session", resource_path: video_path })
-    │    ├── handle_request({ type: "add_prompt",
-    │    │        frame_index, bounding_boxes (pixel xywh), text? })  ← 每個提示畫格
-    │    ├── handle_stream_request({ type: "propagate_in_video", … })
-    │    │        → yields {frame_index, outputs: {out_binary_masks, out_boxes_xywh}}
+    │    ├── handle_request({ type: "add_prompt",              ← 依畫格分組，每 obj_id 一次
+    │    │        frame_index, obj_id,
+    │    │        bounding_boxes (pixel xywh),                ← box 提示
+    │    │        points / point_labels,                      ← point 提示
+    │    │        text? })                                    ← 文字提示（SAM3 only）
+    │    ├── handle_stream_request({ type: "propagate_in_video",
+    │    │        start_frame_index: last_frame,
+    │    │        max_frame_num_to_track: MAX_FRAMES_TO_TRACK })
+    │    │        → yields {frame_index, outputs: {out_binary_masks}}
     │    └── finally: handle_request({ type: "close_session" })    ← 必定執行
-    │    mask → _mask_to_bbox_pct() → VideoRectangle sequence
+    │    mask → _mask_to_bbox_pct() → VideoRectangle sequence（與 context sequence 合併）
     │  ModelResponse { videorectangle: {sequence: [{frame, x, y, width, height, time}…]} }
     ▼
 Label Studio（渲染多畫格追蹤框）
@@ -156,16 +166,21 @@ Label Studio（渲染多畫格追蹤框）
 
 FA3 可大幅提升影片推論速度（主要對 Transformer attention 有效），適用於 Ampere 及以後的 GPU（A100、RTX 3090 等）。
 
+**注意**：`Sam3VideoPredictorMultiGPU` 目前不透過建構子參數控制 FA3，而是依賴 GPU 能力偵測（`model_misc.py`）。`.env.ml` 的 `SAM3_ENABLE_FA3=true` 設定需與 build-time 的 `--build-arg ENABLE_FA3=true` 共同使用，確保 `flash-attn-3` 套件已安裝於映像中。
+
 ```bash
-# 建置時啟用
-docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+# 1. 建置時啟用 FA3（安裝 flash-attn-3）
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml \
   build --build-arg ENABLE_FA3=true sam3-video-backend
 
-# .env 中同時設定
+# 2. .env.ml 中同時設定
 SAM3_ENABLE_FA3=true
+
+# 3. 重啟影片後端
+make ml-up
 ```
 
-> `build_sam3_image_model()` 目前不暴露 `use_fa3` 參數，因此 Flash Attention 3 僅對影片後端有效。
+> Flash Attention 3 目前僅對影片後端有效；影像後端（`build_sam3_image_model()`）不暴露此參數。
 
 ## 執行測試
 

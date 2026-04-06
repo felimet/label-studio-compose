@@ -58,6 +58,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 from typing import List, Dict, Optional
 
 import cv2
@@ -89,14 +90,49 @@ if DEVICE == "cuda":
 _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if DEVICE == "cuda" else None
 
 # ── Checkpoint download ────────────────────────────────────────────────────────
-try:
-    from huggingface_hub import hf_hub_download
+def _download_with_progress(
+    repo_id: str,
+    filename: str,
+    local_dir: str,
+    token: Optional[str],
+) -> str:
+    """Wrap hf_hub_download with a background thread that logs download progress
+    every 30 s so container logs show meaningful progress instead of silence."""
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
+    # Suppress tqdm progress bars — they produce \r-heavy output in container logs.
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+    partial_path = os.path.join(local_dir, filename)
+    stop_event = threading.Event()
+
+    def _log_progress() -> None:
+        while not stop_event.is_set():
+            if os.path.exists(partial_path):
+                size_mb = os.path.getsize(partial_path) / (1024 * 1024)
+                logger.info("  … downloading %s: %.0f MB so far", filename, size_mb)
+            stop_event.wait(30)
+
+    monitor = threading.Thread(target=_log_progress, daemon=True)
+    monitor.start()
+    try:
+        path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=local_dir,
+            token=token,
+        )
+    finally:
+        stop_event.set()
+    return path
+
+
+try:
     _hf_token: Optional[str] = os.getenv("HF_TOKEN") or None
     os.makedirs(MODEL_DIR, exist_ok=True)
 
     logger.info("Downloading SAM3 video checkpoint '%s/%s' …", MODEL_ID, CHECKPOINT_FILENAME)
-    _checkpoint_path: str = hf_hub_download(
+    _checkpoint_path: str = _download_with_progress(
         repo_id=MODEL_ID,
         filename=CHECKPOINT_FILENAME,
         local_dir=MODEL_DIR,
@@ -191,13 +227,19 @@ class NewModel(LabelStudioMLBase):
         task    = tasks[0]
         task_id = task.get("id")
 
-        # ── Video metadata from first VideoRectangle result ────────────────────
-        vr_results = [r for r in context["result"] if r.get("type") == "videorectangle"]
-        if not vr_results:
-            return ModelResponse(predictions=[])
-        frames_count = vr_results[0]["value"].get("framesCount", 0)
-        duration     = vr_results[0]["value"].get("duration", 1.0)
-        fps          = frames_count / duration if duration else 25.0
+        # ── Video metadata from VideoRectangle result (if present) ────────────
+        # Text-only or KeyPoint-only paths have no VideoRectangle in context;
+        # fps/frames_count/duration are probed from the video file in that case.
+        vr_results   = [r for r in context["result"] if r.get("type") == "videorectangle"]
+        frames_count: Optional[int]   = None
+        duration:     Optional[float] = None
+        fps:          Optional[float] = None
+        if vr_results:
+            _fc = vr_results[0]["value"].get("framesCount", 0)
+            _dur = vr_results[0]["value"].get("duration", 1.0)
+            frames_count = _fc
+            duration     = _dur
+            fps          = _fc / _dur if _dur else 25.0
 
         # ── Parse prompts ──────────────────────────────────────────────────────
         geo_prompts = self._get_geo_prompts(context)
@@ -223,6 +265,17 @@ class NewModel(LabelStudioMLBase):
             logger.error("Failed to resolve video path: %s", exc)
             return ModelResponse(predictions=[])
 
+        # Probe video for metadata when not available from VideoRectangle context
+        # (text-only / KeyPoint-only paths).
+        if fps is None:
+            cap  = cv2.VideoCapture(video_path)
+            _fps = cap.get(cv2.CAP_PROP_FPS)
+            _n   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            fps          = _fps if _fps > 0 else 25.0
+            frames_count = _n
+            duration     = _n / fps
+
         # ── Dispatch to correct predictor path ─────────────────────────────────
         try:
             if _USING_SAM2_FALLBACK:
@@ -238,7 +291,7 @@ class NewModel(LabelStudioMLBase):
             return ModelResponse(predictions=[])
 
         # ── Merge context sequence + new sequence ──────────────────────────────
-        context_sequence = vr_results[0]["value"].get("sequence", [])
+        context_sequence = vr_results[0]["value"].get("sequence", []) if vr_results else []
         full_sequence    = context_sequence + sequence
 
         prediction = PredictionValue(
@@ -317,33 +370,78 @@ class NewModel(LabelStudioMLBase):
             for frame_idx in sorted(prompts_by_frame):
                 frame_prompts = prompts_by_frame[frame_idx]
 
-                # Collect boxes for this frame (pixel [x0, y0, w, h])
-                boxes: list[list[float]] = []
-                box_labels: list[int]   = []
+                # ── Build per-object prompt buckets ────────────────────────────
+                # box / positive-point prompts define objects (keyed by obj_id).
+                # Negative (background) points are routed to all box-defined
+                # objects on the same frame; if no boxes exist, they become their
+                # own entry (SAM3 will treat them as background constraints).
+                by_obj: dict[str, dict] = defaultdict(
+                    lambda: {"boxes": [], "pos_points": [], "neg_points": []}
+                )
+                box_obj_ids: list[str] = []
+
                 if vid_w > 0 and vid_h > 0:
                     for p in frame_prompts:
-                        x0 = p["x_pct"] / 100.0 * vid_w
-                        y0 = p["y_pct"] / 100.0 * vid_h
-                        bw = p["w_pct"] / 100.0 * vid_w
-                        bh = p["h_pct"] / 100.0 * vid_h
-                        boxes.append([x0, y0, bw, bh])
-                        box_labels.append(1)
+                        if p["type"] == "box":
+                            x0 = p["x_pct"] / 100.0 * vid_w
+                            y0 = p["y_pct"] / 100.0 * vid_h
+                            bw = p["w_pct"] / 100.0 * vid_w
+                            bh = p["h_pct"] / 100.0 * vid_h
+                            by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
+                            if p["obj_id"] not in box_obj_ids:
+                                box_obj_ids.append(p["obj_id"])
+                        elif p["type"] == "point":
+                            px = p["x_pct"] / 100.0 * vid_w
+                            py = p["y_pct"] / 100.0 * vid_h
+                            if p["is_positive"]:
+                                by_obj[p["obj_id"]]["pos_points"].append([px, py])
+                            else:
+                                # Background hint → attach to all box objects; if
+                                # none exist, attach to own obj_id.
+                                targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
+                                for oid in targets:
+                                    by_obj[oid]["neg_points"].append([px, py])
 
-                req: dict = {
-                    "type":             "add_prompt",
-                    "session_id":       session_id,
-                    "frame_index":      frame_idx,
-                    "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
-                    "clear_old_boxes":  False,
-                    "clear_old_points": False,
-                }
-                if text_prompt and ENABLE_PCS:
-                    req["text"] = text_prompt
-                if boxes:
-                    req["bounding_boxes"]       = boxes
-                    req["bounding_box_labels"]  = box_labels
+                if not by_obj:
+                    # Dimension probe failed; still send text prompt if available.
+                    if text_prompt and ENABLE_PCS and frame_prompts:
+                        predictor.handle_request({
+                            "type":             "add_prompt",
+                            "session_id":       session_id,
+                            "frame_index":      frame_idx,
+                            "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
+                            "text":             text_prompt,
+                            "clear_old_boxes":  False,
+                            "clear_old_points": False,
+                        })
+                    continue
 
-                predictor.handle_request(req)
+                for obj_id, data in by_obj.items():
+                    req: dict = {
+                        "type":             "add_prompt",
+                        "session_id":       session_id,
+                        "frame_index":      frame_idx,
+                        "obj_id":           obj_id_map[obj_id],
+                        "clear_old_boxes":  False,
+                        "clear_old_points": False,
+                    }
+                    if text_prompt and ENABLE_PCS:
+                        req["text"] = text_prompt
+                    if data["boxes"]:
+                        req["bounding_boxes"]      = data["boxes"]
+                        req["bounding_box_labels"] = [1] * len(data["boxes"])
+                    pts: list[list[float]] = []
+                    lbs: list[int]         = []
+                    for pt in data["pos_points"]:
+                        pts.append(pt)
+                        lbs.append(1)
+                    for pt in data["neg_points"]:
+                        pts.append(pt)
+                        lbs.append(0)
+                    if pts:
+                        req["points"]       = pts
+                        req["point_labels"] = lbs
+                    predictor.handle_request(req)
 
             # Propagate forward from the last prompted frame
             last_frame = max(p["frame_idx"] for p in geo_prompts)
@@ -428,18 +526,53 @@ class NewModel(LabelStudioMLBase):
             inference_state = predictor.init_state(video_path=frame_dir)
             predictor.reset_state(inference_state)
 
-            for prompt in geo_prompts:
-                pts, lbs = self._rect_to_keypoints(
-                    prompt["x_pct"], prompt["y_pct"],
-                    prompt["w_pct"], prompt["h_pct"],
-                    width, height,
-                )
+            # ── Build per-(frame, obj_id) point buckets ────────────────────
+            # Boxes → converted to 5-point representation via _rect_to_keypoints.
+            # Positive keypoints → appended directly.
+            # Negative (background) keypoints → routed to box-defined objects on
+            # the same frame; if none exist, routed to own obj_id.
+            from collections import defaultdict
+            prompts_by_frame_sam2: dict[int, list[dict]] = defaultdict(list)
+            for p in geo_prompts:
+                prompts_by_frame_sam2[p["frame_idx"]].append(p)
+
+            by_frame_obj: dict[tuple, dict] = defaultdict(lambda: {"pts": [], "lbs": []})
+
+            for frame_idx, frame_prompts in sorted(prompts_by_frame_sam2.items()):
+                box_obj_ids_in_frame = [
+                    p["obj_id"] for p in frame_prompts if p["type"] == "box"
+                ]
+                for p in frame_prompts:
+                    key = (frame_idx, p["obj_id"])
+                    if p["type"] == "box":
+                        kp_pts, kp_lbs = self._rect_to_keypoints(
+                            p["x_pct"], p["y_pct"],
+                            p["w_pct"], p["h_pct"],
+                            width, height,
+                        )
+                        by_frame_obj[key]["pts"].extend(kp_pts.tolist())
+                        by_frame_obj[key]["lbs"].extend(kp_lbs.tolist())
+                    elif p["type"] == "point":
+                        px = p["x_pct"] / 100.0 * width
+                        py = p["y_pct"] / 100.0 * height
+                        if p["is_positive"]:
+                            by_frame_obj[key]["pts"].append([px, py])
+                            by_frame_obj[key]["lbs"].append(1)
+                        else:
+                            targets = box_obj_ids_in_frame if box_obj_ids_in_frame else [p["obj_id"]]
+                            for oid in targets:
+                                by_frame_obj[(frame_idx, oid)]["pts"].append([px, py])
+                                by_frame_obj[(frame_idx, oid)]["lbs"].append(0)
+
+            for (frame_idx, obj_id), data in sorted(by_frame_obj.items()):
+                if not data["pts"]:
+                    continue
                 predictor.add_new_points(
                     inference_state=inference_state,
-                    frame_idx=prompt["frame_idx"],
-                    obj_id=obj_id_map[prompt["obj_id"]],
-                    points=pts,
-                    labels=lbs,
+                    frame_idx=frame_idx,
+                    obj_id=obj_id_map[obj_id],
+                    points=np.array(data["pts"], dtype=np.float32),
+                    labels=np.array(data["lbs"], dtype=np.int32),
                 )
 
             sequence: list[dict] = []
@@ -469,30 +602,51 @@ class NewModel(LabelStudioMLBase):
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _get_geo_prompts(self, context: dict) -> list[dict]:
-        """Parse VideoRectangle items into prompt dicts."""
+        """Parse VideoRectangle and KeyPointLabels items into prompt dicts.
+
+        Returns a list of dicts with ``type`` = "box" or "point".
+        Box fields  : obj_id, frame_idx, x_pct, y_pct, w_pct, h_pct
+        Point fields: obj_id, frame_idx, x_pct, y_pct, is_positive, label_name
+        """
         prompts: list[dict] = []
         for item in context.get("result", []):
-            if item.get("type") != "videorectangle":
-                continue
-            obj_id = item["id"]
-            for seq in item["value"].get("sequence", []):
-                if not seq.get("enabled", True):
-                    continue
-                frame_idx = max(seq.get("frame", 1) - 1, 0)  # LS 1-indexed → 0-indexed
-                x_pct = seq.get("x",      0.0)
-                y_pct = seq.get("y",      0.0)
-                w_pct = seq.get("width",  0.0)
-                h_pct = seq.get("height", 0.0)
+            item_type = item.get("type")
+
+            if item_type == "videorectangle":
+                obj_id = item["id"]
+                for seq in item["value"].get("sequence", []):
+                    if not seq.get("enabled", True):
+                        continue
+                    frame_idx = max(seq.get("frame", 1) - 1, 0)  # LS 1-indexed → 0-indexed
+                    prompts.append({
+                        "type":      "box",
+                        "obj_id":    obj_id,
+                        "frame_idx": frame_idx,
+                        "x_pct":     seq.get("x",      0.0),
+                        "y_pct":     seq.get("y",      0.0),
+                        "w_pct":     seq.get("width",  0.0),
+                        "h_pct":     seq.get("height", 0.0),
+                    })
+
+            elif item_type == "keypointlabels":
+                obj_id     = item["id"]
+                val        = item["value"]
+                # LS sends frame as 1-indexed for video controls; default to frame 1
+                frame_idx  = max(val.get("frame", 1) - 1, 0)
+                label_name = (val.get("keypointlabels") or ["Object"])[0]
+                is_positive = int(
+                    item.get("is_positive", 0 if label_name.lower() == "background" else 1)
+                )
                 prompts.append({
-                    "obj_id":    obj_id,
-                    "frame_idx": frame_idx,
-                    "x_pct":     x_pct,
-                    "y_pct":     y_pct,
-                    "w_pct":     w_pct,
-                    "h_pct":     h_pct,
-                    # Percentages converted to pixel [x0, y0, w, h] in _predict_sam3_inner
-                    # after probing video dimensions via cv2.VideoCapture.
+                    "type":        "point",
+                    "obj_id":      obj_id,
+                    "frame_idx":   frame_idx,
+                    "x_pct":       val.get("x", 0.0),
+                    "y_pct":       val.get("y", 0.0),
+                    "is_positive": is_positive,
+                    "label_name":  label_name,
                 })
+
         return sorted(prompts, key=lambda p: p["frame_idx"])
 
     def _get_text_prompt(self, context: dict) -> Optional[str]:

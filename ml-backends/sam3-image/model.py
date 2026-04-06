@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from typing import List, Dict, Optional
 from uuid import uuid4
 
@@ -70,14 +71,49 @@ if DEVICE == "cuda":
 _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if DEVICE == "cuda" else None
 
 # ── Checkpoint download ────────────────────────────────────────────────────────
-try:
-    from huggingface_hub import hf_hub_download
+def _download_with_progress(
+    repo_id: str,
+    filename: str,
+    local_dir: str,
+    token: Optional[str],
+) -> str:
+    """Wrap hf_hub_download with a background thread that logs download progress
+    every 30 s so container logs show meaningful progress instead of silence."""
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
+    # Suppress tqdm progress bars — they produce \r-heavy output in container logs.
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+    partial_path = os.path.join(local_dir, filename)
+    stop_event = threading.Event()
+
+    def _log_progress() -> None:
+        while not stop_event.is_set():
+            if os.path.exists(partial_path):
+                size_mb = os.path.getsize(partial_path) / (1024 * 1024)
+                logger.info("  … downloading %s: %.0f MB so far", filename, size_mb)
+            stop_event.wait(30)
+
+    monitor = threading.Thread(target=_log_progress, daemon=True)
+    monitor.start()
+    try:
+        path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=local_dir,
+            token=token,
+        )
+    finally:
+        stop_event.set()
+    return path
+
+
+try:
     _hf_token: Optional[str] = os.getenv("HF_TOKEN") or None
     os.makedirs(MODEL_DIR, exist_ok=True)
 
     logger.info("Downloading SAM3 checkpoint '%s/%s' …", MODEL_ID, CHECKPOINT_FILENAME)
-    _checkpoint_path: str = hf_hub_download(
+    _checkpoint_path: str = _download_with_progress(
         repo_id=MODEL_ID,
         filename=CHECKPOINT_FILENAME,
         local_dir=MODEL_DIR,
@@ -176,8 +212,15 @@ class NewModel(LabelStudioMLBase):
             return ModelResponse(predictions=[])
 
         # ── Parse context ──────────────────────────────────────────────────────
-        image_width  = context["result"][0]["original_width"]
-        image_height = context["result"][0]["original_height"]
+        # TextArea results don't carry original_width/height — find first geometric result.
+        # When only TextArea is present (text-only path), dimensions are read from the
+        # image itself after loading.
+        geo_ctx = next(
+            (r for r in context["result"] if r.get("type") != "textarea"),
+            None,
+        )
+        image_width:  Optional[int] = geo_ctx["original_width"]  if geo_ctx else None
+        image_height: Optional[int] = geo_ctx["original_height"] if geo_ctx else None
 
         text_prompt: Optional[str] = None
         point_coords: list[list[float]] = []
@@ -202,12 +245,18 @@ class NewModel(LabelStudioMLBase):
             y = ctx["value"].get("y", 0.0) * image_height / 100.0
 
             label_list = ctx["value"].get(ctx_type, [])
-            if label_list and selected_label is None:
-                selected_label = label_list[0]
+            label_name = label_list[0] if label_list else ""
+            # Only set selected_label from non-background, non-empty labels
+            if label_name and label_name.lower() != "background" and selected_label is None:
+                selected_label = label_name
 
             if ctx_type == "keypointlabels":
-                # is_positive: 1 = foreground, 0 = background (set by LS smart tool)
-                point_labels.append(int(ctx.get("is_positive", 1)))
+                # is_positive: LS sets this for smart tools; fall back to label name.
+                is_pos = int(ctx.get(
+                    "is_positive",
+                    0 if label_name.lower() == "background" else 1,
+                ))
+                point_labels.append(is_pos)
                 point_coords.append([x, y])
 
             elif ctx_type == "rectanglelabels":
@@ -234,7 +283,13 @@ class NewModel(LabelStudioMLBase):
         # ── Load image ─────────────────────────────────────────────────────────
         img_url  = tasks[0]["data"][value]
         img_path = self.get_local_path(img_url, task_id=tasks[0].get("id"))
-        image    = np.array(Image.open(img_path).convert("RGB"))
+        pil_img  = Image.open(img_path).convert("RGB")
+
+        # Text-only path: no geometric context, derive dimensions from the image.
+        if image_width is None or image_height is None:
+            image_width, image_height = pil_img.size  # PIL: (width, height)
+
+        image = np.array(pil_img)
 
         # ── Run SAM3 predictor ─────────────────────────────────────────────────
         try:
