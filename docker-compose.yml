@@ -157,7 +157,7 @@ services:
       - LOG_LEVEL=WARNING
     volumes:
       - ./label-studio-data:/label-studio/data
-      - ./label-studio-data/file:/label-studio/data/file:rw
+      - ./label-studio-data/local_storage_file:/label-studio/data/file
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
