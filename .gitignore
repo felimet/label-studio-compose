@@ -1,11 +1,12 @@
 # claudeignore
-.claude
+.claude/
 
 # Secrets — NEVER commit
 .env
 
 # Runtime data volumes
 data/
+label-studio-data/
 minio-data/
 postgres-data/
 redis-data/
