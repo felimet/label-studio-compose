@@ -24,6 +24,11 @@ cp .env.example .env
 #   POSTGRES_PASSWORD, REDIS_PASSWORD, MINIO_ROOT_USER,
 #   MINIO_ROOT_PASSWORD, LABEL_STUDIO_SECRET_KEY,
 #   LABEL_STUDIO_PASSWORD, LABEL_STUDIO_USER_TOKEN
+# NOTE: LABEL_STUDIO_USER_TOKEN must be ≤40 chars — use: openssl rand -hex 20
+
+# For SAM3 ML backends (optional — GPU required):
+cp .env.ml.example .env.ml
+# Edit .env.ml — fill in LABEL_STUDIO_API_KEY and HF_TOKEN at minimum
 
 # Start core stack (exposed on dev ports — see docker-compose.override.yml)
 make up
@@ -129,5 +134,6 @@ docs(architecture): update volume table for dual backends
 - [ ] `make health` passes on a clean stack
 - [ ] No secrets committed (check `.env` not staged)
 - [ ] Tests pass: `pytest ml-backends/sam3-image/tests ml-backends/sam3-video/tests`
-- [ ] `.env.example` updated if new env vars added
+- [ ] `.env.example` updated if new core env vars added
+- [ ] `.env.ml.example` updated if new SAM3 env vars added
 - [ ] `docs/configuration.md` updated if new env vars added

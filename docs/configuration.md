@@ -42,8 +42,8 @@
 | `LABEL_STUDIO_USERNAME` | `admin@example.com` | 初始管理員 Email |
 | `LABEL_STUDIO_PASSWORD` | — | 初始管理員密碼 |
 | `LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK` | `true` | 關閉公開註冊（需邀請連結） |
-| `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` | `/label-studio/data/file` | Local files storage 根目錄（**容器內路徑**）。host 目錄 `./label-studio-data/file` 透過 volume mount 對應至此路徑，填入 UI 時也須用容器內路徑 |
-| `LABEL_STUDIO_USER_TOKEN` | `openssl rand -hex 32` | 首次啟動時寫入 admin 的 legacy API token；**僅首次生效**（見下方說明） |
+| `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` | `/label-studio/data/file` | Local files storage 根目錄（**容器內路徑**）。host 目錄 `./label-studio-data/local_storage_file` 透過 volume mount 對應至此路徑，填入 UI 時也須用容器內路徑 |
+| `LABEL_STUDIO_USER_TOKEN` | `openssl rand -hex 20` | 首次啟動時寫入 admin 的 legacy API token；**僅首次生效**（見下方說明）。**必須 ≤40 字元**：用 `hex 20`（40 chars），勿用 `hex 32`（64 chars 會靜默破壞首次啟動建立使用者） |
 | `DATA_UPLOAD_MAX_NUMBER_FILES` | `100000` | Django 上傳檔案數上限；預設 100 過低，修復 [issue #6777](https://github.com/HumanSignal/label-studio/issues/6777) |
 | `JSON_LOG` | `1` | 輸出結構化 JSON log；LS 原始碼支援但官方文件未列 |
 
@@ -76,21 +76,29 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 ## SAM3 ML 後端
 
-<!-- AUTO-GENERATED from .env.example + docker-compose.ml.yml -->
+<!-- AUTO-GENERATED from .env.ml.example + docker-compose.ml.yml -->
+> 所有 SAM3 變數定義於 `.env.ml`（從 `.env.ml.example` 複製後填入）。
+> `docker-compose.ml.yml` 透過 `env_file: .env.ml` 載入；`environment:` 區塊僅含靜態值（URL、路徑、port）。
+
 ### 必填
 
 | 變數 | 說明 |
 |------|------|
-| `HF_TOKEN` | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
 | `LABEL_STUDIO_API_KEY` | 兩個 SAM3 後端共用的 LS API 金鑰。建議在 LS UI（Settings → Access Tokens）建立專用 token，與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
+| `HF_TOKEN` | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
 
 ### 模型設定
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM3_IMAGE_MODEL_ID` | `facebook/sam3.1` | 影像後端 HuggingFace Hub 模型 ID |
-| `SAM3_VIDEO_MODEL_ID` | `facebook/sam3.1` | 影片後端 HuggingFace Hub 模型 ID |
-| `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援，極慢） |
+| `SAM3_MODEL_ID` | `facebook/sam3.1` | HuggingFace Hub 模型 ID（影像與影片後端共用） |
+| `SAM3_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | 模型 checkpoint 檔名（與 `SAM3_MODEL_ID` 配對，約 3.5 GB） |
+| `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援，極慢）。CUDA 需 NVIDIA driver ≥ 535.x |
+
+### 影片後端設定
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
 | `MAX_FRAMES_TO_TRACK` | `10` | 影片後端每次 predict 最多追蹤畫格數 |
 
 ### PCS（文字概念提示）設定
@@ -105,18 +113,24 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM3_ENABLE_FA3` | `false` | 啟用 Flash Attention 3 推論加速（需在 build-time 先傳入 `--build-arg ENABLE_FA3=true`） |
+| `SAM3_ENABLE_FA3` | `false` | 啟用 Flash Attention 3 推論加速。需兩步驟：1) `docker compose build --build-arg ENABLE_FA3=true sam3-video-backend`；2) 此處設 `true`。僅支援 Ampere（A100、RTX 3090）以上 GPU |
 
 ### Gunicorn 並發設定
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `ML_WORKERS` | `1` | Gunicorn workers 數（每個 worker preload 完整模型至 VRAM）。單 GPU 建議保持 1；雙 GPU 可設 2 |
-| `ML_THREADS` | `8` | 每個 worker 的執行緒數（gthread 模式，共享模型權重，不額外佔用 VRAM）。8-core CPU 適用 8；16-core 可設 16 |
-| `ML_BASIC_AUTH_USER` | — | ML backend API 的 Basic Auth 帳號（選填） |
-| `ML_BASIC_AUTH_PASS` | — | ML backend API 的 Basic Auth 密碼（選填） |
+| `WORKERS` | `1` | Gunicorn worker 數（每個 worker preload 完整模型至 VRAM）。單 GPU 建議保持 1；雙 GPU 可設 2 |
+| `THREADS` | `8` | 每個 worker 的執行緒數（gthread 模式，共享模型權重，不額外佔用 VRAM）。8-core CPU 適用 8；16-core 可設 16 |
 
-> `TIMEOUT` 由 Dockerfile ENV 定義（image: 120 s、video: 300 s），可在 compose 的 environment 區塊中覆寫。
+### 日誌與驗證
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `LOG_LEVEL` | `INFO` | 日誌層級（`DEBUG`、`INFO`、`WARNING`、`ERROR`） |
+| `BASIC_AUTH_USER` | — | ML backend API 的 Basic Auth 帳號（選填；留空則停用） |
+| `BASIC_AUTH_PASS` | — | ML backend API 的 Basic Auth 密碼（選填；留空則停用） |
+
+> `TIMEOUT` 由 Dockerfile ENV 定義（image: 120 s、video: 300 s），可在 `docker-compose.ml.yml` 的 `environment:` 區塊中覆寫。
 <!-- END AUTO-GENERATED -->
 
 ### 說明
@@ -128,8 +142,11 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 ## 產生強密碼
 
 ```bash
-# Django Secret Key / LABEL_STUDIO_USER_TOKEN
+# Django Secret Key
 openssl rand -hex 32
+
+# LABEL_STUDIO_USER_TOKEN  ← 必須 ≤40 chars；Token field max_length=40
+openssl rand -hex 20
 
 # 資料庫 / Redis / MinIO 密碼
 openssl rand -base64 24

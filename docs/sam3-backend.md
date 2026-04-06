@@ -10,7 +10,7 @@ SAM3（Segment Anything Model 3）是 Meta 於 2025 年 11 月釋出的下一代
 ## 前置需求
 
 1. **同意 Meta 使用條款**：前往 [facebook/sam3.1](https://huggingface.co/facebook/sam3.1) → *Agree and access repository*
-2. 產生 HuggingFace **Read Token** → 填入 `.env` 的 `HF_TOKEN`
+2. 產生 HuggingFace **Read Token** → 填入 `.env.ml` 的 `HF_TOKEN`
 3. NVIDIA GPU，VRAM ≥ 8 GB（bfloat16 推論，torch 2.7 + CUDA 12.6）
 4. 主機已安裝 `nvidia-container-toolkit`
 

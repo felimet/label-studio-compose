@@ -125,7 +125,7 @@ docker compose up -d --no-deps nginx
 
 ### 首次登入帳號不存在 / 登入後 500 "No memberships found"
 
-`DEFAULT_USERNAME`/`DEFAULT_USER_PASSWORD` 只在 Postgres DB **首次初始化**時生效。若 DB 已存在，需手動建立：
+`LABEL_STUDIO_USERNAME`/`LABEL_STUDIO_PASSWORD` 只在 Postgres DB **首次初始化**時生效。若 DB 已存在，需手動建立：
 
 ```bash
 docker compose exec label-studio bash -c '
@@ -161,7 +161,7 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml \
   logs sam3-image-backend | grep -i error
 ```
 
-Fix: update `HF_TOKEN` in `.env`, then:
+Fix: update `HF_TOKEN` in `.env.ml`, then:
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.ml.yml \
   restart sam3-image-backend sam3-video-backend
@@ -172,8 +172,8 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml \
 Reduce concurrent workers (already set to 1 in Dockerfile CMD). If OOM still occurs:
 
 1. Close other GPU workloads
-2. Use `DEVICE=cpu` in `.env` (very slow, no GPU required)
-3. Try a smaller model: `SAM3_IMAGE_MODEL_ID=facebook/sam3`
+2. Use `DEVICE=cpu` in `.env.ml` (very slow, no GPU required)
+3. Try a smaller model: set `SAM3_MODEL_ID=facebook/sam3` and `SAM3_CHECKPOINT_FILENAME=sam3.pt` in `.env.ml`
 
 ### Redis connection refused
 
