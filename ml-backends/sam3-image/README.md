@@ -4,10 +4,11 @@ Interactive image segmentation using [SAM 3.1](https://github.com/facebookresear
 
 ## Features
 
-- **Text prompt** (SAM3 open-vocabulary PCS): label name → find all matching instances
+- **Text prompt** (SAM3 open-vocabulary PCS): label name → full-image detection of all matching instances
 - **Point prompt**: KeyPointLabels (positive / negative clicks)
-- **Box prompt**: RectangleLabels (bounding box)
+- **Box prompt**: RectangleLabels — `Object` (positive) or `Exclude` (negative exemplar, `label=False`)
 - **Output**: BrushLabels with Label Studio RLE encoding
+- **Scores display**: inference candidate scores written to `TextArea name="scores"` after each prediction
 
 ## Prerequisites
 
@@ -39,7 +40,7 @@ Use `labeling_config.xml` as your project's labeling interface.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SAM3_IMAGE_MODEL_ID` | `facebook/sam3` | HuggingFace model ID (image backend). Fallback: `SAM3_MODEL_ID` |
+| `SAM3_IMAGE_MODEL_ID` | `facebook/sam3.1` | HuggingFace model ID (image backend). Fallback: `SAM3_MODEL_ID` |
 | `SAM3_IMAGE_CHECKPOINT_FILENAME` | `sam3.pt` | Checkpoint filename (~3.45 GB). No SAM3.1 image variant exists. Fallback: `SAM3_CHECKPOINT_FILENAME` |
 | `DEVICE` | `cuda` | `cuda` or `cpu` |
 | `HF_TOKEN` | — | HuggingFace access token (required for gated model) |
@@ -51,16 +52,15 @@ Use `labeling_config.xml` as your project's labeling interface.
 
 ## Predict Paths
 
-Three paths, selectable by what is provided in the Label Studio context:
+Three paths, all routed through `Sam3Processor` (no SAM2 fallback):
 
 | Input | Path | Notes |
 |-------|------|-------|
-| TextArea only | Text-only PCS | `set_text_prompt()` → up to N masks |
-| TextArea + geometry | Mixed | `set_text_prompt()` then `add_geometric_prompt()` |
-| Geometry only | Geometric | `add_geometric_prompt()` per prompt |
-| Any (SAM2 fallback) | SAM2 classic | Text ignored; geometric → `SAM2ImagePredictor.predict()` |
+| TextArea only | Text-only PCS | `set_text_prompt()` → full-image detection, up to N masks. Image dimensions read from the loaded image (no geometric context required). |
+| TextArea + geometry | Mixed | `set_text_prompt()` then `add_geometric_prompt()` per box/point |
+| Geometry only | Geometric | `add_geometric_prompt()` per prompt; `Object` = `label=True`, `Exclude` = `label=False` |
 
-> **Point prompts**: `Sam3Processor` only accepts boxes, not points. Each KeyPoint is represented as a tiny 1%-sized box with `label=True/False` for positive/negative.
+> **Point prompts**: `Sam3Processor` only accepts boxes, not points. Each KeyPoint is represented as a tiny box (±0.5% of image dims) with `label=True/False` for positive/negative.
 
 ## Running Tests
 

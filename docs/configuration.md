@@ -113,7 +113,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM3_ENABLE_PCS` | `true` | 啟用自然語言文字提示（PCS）功能。`false` = 退化為 SAM2 幾何模式 |
+| `SAM3_ENABLE_PCS` | `true` | 啟用自然語言文字提示（PCS）功能，支援純文字（text-only）與 text+geo mixed 兩種路徑。`false` = 幾何提示專用模式（影片後端退化為 SAM2 fallback 幾何模式） |
 | `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | 文字提示偵測的最低置信分數（`0`–`1`；越低偵測越多但可能有假陽性） |
 | `SAM3_RETURN_ALL_MASKS` | `false` | `true` = 回傳所有偵測實例；`false` = 只回傳得分最高的一個 |
 
