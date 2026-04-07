@@ -58,7 +58,7 @@ import sys
 import tempfile
 import threading
 from typing import List, Dict, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qs
 
 import cv2
 import numpy as np
@@ -298,6 +298,21 @@ class NewModel(LabelStudioMLBase):
         except Exception as exc:
             logger.error("Failed to resolve video path: %s", exc)
             return ModelResponse(predictions=[])
+
+        # SAM3 start_session validates the file extension.
+        # Label Studio's download_and_cache strips extensions (e.g. "abc123__").
+        # If the cached file has no extension, create a symlink with the correct one.
+        if not os.path.splitext(video_path)[1]:
+            _parsed = urlparse(video_url)
+            # Try query param ?d=path/to/file.mp4 first, then the URL path itself
+            _d_param = parse_qs(_parsed.query).get("d", [""])[0]
+            _ref_path = _d_param or _parsed.path
+            _ext = os.path.splitext(_ref_path)[1] or ".mp4"
+            _linked = video_path + _ext
+            if not os.path.exists(_linked):
+                os.symlink(video_path, _linked)
+            logger.debug("Video path symlinked: %s → %s", video_path, _linked)
+            video_path = _linked
 
         # Probe video for metadata when not available from VideoRectangle context
         # (text-only / KeyPoint-only paths).
