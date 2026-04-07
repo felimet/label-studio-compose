@@ -281,14 +281,6 @@ class NewModel(LabelStudioMLBase):
         if not geo_prompts and not text_prompt:
             return ModelResponse(predictions=[])
 
-        # Text-only Submit: stage text without triggering inference.
-        # Inference fires when geometry (VideoRectangle) is also present.
-        if text_prompt and not geo_prompts:
-            logger.info(
-                "Text prompt staged (%r) — inference deferred until VideoRectangle is added.",
-                text_prompt,
-            )
-            return ModelResponse(predictions=[])
 
         if text_prompt and _USING_SAM2_FALLBACK:
             logger.warning(

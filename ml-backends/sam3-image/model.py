@@ -293,14 +293,6 @@ class NewModel(LabelStudioMLBase):
         has_text = ENABLE_PCS and text_prompt is not None
         has_geo  = bool(point_coords) or bool(input_boxes)
 
-        # Text-only (no geometry) → store silently, do NOT run inference.
-        # TextArea submit is used to "stage" a text prompt; the actual prediction
-        # fires only when the user adds a box or keypoint (geometry in context).
-        # This prevents a spurious predict when the user types text before drawing.
-        if has_text and not has_geo:
-            logger.info("Text prompt staged (%r) — inference deferred until geometry is added.", text_prompt)
-            return ModelResponse(predictions=[])
-
         if not has_text and not has_geo:
             return ModelResponse(predictions=[])
 

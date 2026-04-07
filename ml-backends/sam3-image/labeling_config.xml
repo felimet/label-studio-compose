@@ -75,7 +75,7 @@
   <!-- Optional: text prompt (Submit 暫存文字，不立即觸發推理) -->
   <View className="sam3-section">
     <HyperText name="h_text" value="" className="sam3-label sam3-hint" inline="true">
-      <span title="輸入概念文字後按 Submit，文字會被暫存。&#10;&#10;接著用 Box / Keypoint 觸發推理時，&#10;文字與幾何合併送出（Text+Geo mixed mode）。&#10;&#10;不輸入文字直接框選 → 純幾何模式（SAM2）。&#10;⚠ SAM2 fallback 時文字 prompt 無效。">Text Prompt (optional)</span>
+      <span title="輸入概念文字後按 Submit，立即觸發推理。&#10;&#10;純文字 → SAM3 全圖偵測所有符合描述的 instance。&#10;文字 + Box / Keypoint → Text+Geo mixed mode（更精確）。&#10;不輸入文字直接框選 → 純幾何模式。">Text Prompt (optional)</span>
     </HyperText>
     <TextArea name="text_prompt" toName="image"
               placeholder="e.g. crack, spalling, rebar"
