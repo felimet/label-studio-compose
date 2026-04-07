@@ -67,7 +67,7 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
 # Enabled via: docker compose build --build-arg ENABLE_FA3=true sam3-video-backend
 # FA3 is effective for video: build_sam3_video_predictor(use_fa3=True).
 # Also set SAM3_ENABLE_FA3=true in .env to activate at runtime.
-ARG ENABLE_FA3=true
+ARG ENABLE_FA3=false
 RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     if [ "$ENABLE_FA3" = "true" ]; then \
         echo "Installing Flash Attention 3 and cc_torch …" && \
