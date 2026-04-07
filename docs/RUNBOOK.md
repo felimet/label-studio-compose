@@ -233,6 +233,67 @@ Reduce concurrent workers (already set to 1 in Dockerfile CMD). If OOM still occ
 2. Use `DEVICE=cpu` in `.env.ml` (very slow, no GPU required)
 3. Try a smaller model: set `SAM3_MODEL_ID=facebook/sam3` and `SAM3_CHECKPOINT_FILENAME=sam3.pt` in `.env.ml`
 
+### Cloud Storage 概念速查
+
+**Source Cloud Storage**（來源儲存）：存放「原始資料」或「任務定義」。
+
+- 可放影像、音訊、影片等媒體檔，或 JSON / JSONL / Parquet 格式的任務定義檔。
+- 專案按 **Sync** 時，Label Studio 掃描 bucket，將物件轉成任務（tasks），但實際檔案不搬入資料庫——以 URL 或 presigned URL 方式直接讀取。
+- **Import Method** 決定掃描行為：
+  - `Tasks`（預設）：把每個檔案視為 JSON/JSONL/Parquet 任務定義來解析。
+  - `Files`：把每個檔案視為媒體來源物件，自動包裝成帶 URL 的任務。
+
+**Target Cloud Storage**（目標儲存）：存放「標注結果」。
+
+- Annotator 按 Submit / Update 後，Label Studio 同時寫入自身 DB 與目標 bucket。
+- 下游 ML pipeline 直接從此 bucket 撈標注 JSON 做訓練或備份遷移。
+
+---
+
+### Local File Storage — UnsupportedFileFormatError（.mp4 / 媒體檔）
+
+**症狀**：
+
+```
+io_storages.exceptions.UnsupportedFileFormatError: File "...BC500-001.mp4" is not a
+JSON/JSONL/Parquet file. Only .json, .jsonl, and .parquet files can be processed.
+```
+
+**根因**：Local Storage 的 Import Method 設成 `Tasks`（只接受 JSON），遇到 `.mp4` 就拒絕。
+
+**修法 1 — UI**：
+
+1. Project → Settings → Cloud Storage → 編輯該 Local Storage
+2. Step 2 **Import Settings & Preview** → **Import Method** 改選 `Files - Treat each file as a source object`
+3. **File Name Filter** 改為 `.*\.(mp4|avi|mov|webm)$`（或清空以接受所有格式）
+4. Load Preview → Next → **Save & Sync**
+
+**修法 2 — API**：
+
+```bash
+# 修改 storage（換成實際 storage id）
+curl -X PATCH \
+  "${LABEL_STUDIO_HOST}/api/storages/localfiles/<STORAGE_ID>" \
+  -H "Authorization: Token ${LABEL_STUDIO_USER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"use_blob_urls": true}'
+
+# 重新同步
+curl -X POST \
+  "${LABEL_STUDIO_HOST}/api/storages/localfiles/<STORAGE_ID>/sync" \
+  -H "Authorization: Token ${LABEL_STUDIO_USER_TOKEN}"
+```
+
+修正後，每個 `.mp4` 會自動產生如下任務：
+
+```json
+{"data": {"video": "/data/local-files/?d=test-video/BC500-001.mp4"}}
+```
+
+> **前提**：`LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true` 與 `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` 已正確設定（見 [configuration.md](configuration.md)）。
+
+---
+
 ### Redis connection refused
 
 ```bash

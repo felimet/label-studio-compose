@@ -6,9 +6,10 @@ Same lazy-loading pattern as image backend — checkpoint downloaded at module
 scope, model loaded on first predict() via _ensure_loaded(), after gunicorn
 fork.  Do NOT use --preload.
 
-SAM3 video API (facebookresearch/sam3)
----------------------------------------
-  predictor = Sam3VideoPredictorMultiGPU(checkpoint_path, use_fa3, ...)
+SAM3.1 video API (facebookresearch/sam3 @ sam3.1 branch)
+----------------------------------------------------------
+  predictor = build_sam3_multiplex_video_predictor(checkpoint_path, use_fa3=False, ...)
+  # Returns Sam3MultiplexVideoPredictor (extends Sam3BasePredictor)
 
   Session lifecycle per request:
     resp = _predictor.handle_request({"type": "start_session",
@@ -19,7 +20,7 @@ SAM3 video API (facebookresearch/sam3)
                                "session_id": session_id,
                                "frame_index": 0,
                                "text": "optional text prompt",
-                               "bounding_boxes": [[x0, y0, w, h]],   # normalised [0-1] xywh (NOT pixel)
+                               "bounding_boxes": [[x0, y0, w, h]],   # pixel xywh
                                "bounding_box_labels": [1],
                                "points": [[px, py]],                  # pixel xy
                                "point_labels": [1],
@@ -30,23 +31,18 @@ SAM3 video API (facebookresearch/sam3)
     for frame_data in _predictor.handle_stream_request(
             {"type": "propagate_in_video",
              "session_id": session_id,
-             "propagation_direction": "forward",
+             "propagation_direction": "both",
              "max_frame_num_to_track": N}):
         frame_idx = frame_data["frame_index"]
         outputs   = frame_data["outputs"]
-        # outputs["out_obj_ids"]      ndarray [N]
-        # outputs["out_binary_masks"] ndarray [N, H, W] bool
-        # outputs["out_boxes_xywh"]   ndarray [N, 4]    pixel
 
     _predictor.handle_request({"type": "close_session",
                                "session_id": session_id})
 
-Key difference from SAM2
---------------------------
-  - No manual cv2 frame splitting; predictor handles it via video_loader_type="cv2"
-  - bounding_boxes are pixel [x0, y0, w, h] (NOT xyxy, NOT normalized)
-  - Supports text prompt via "text" key in add_prompt
-  - Flash Attention 3 enabled via use_fa3=True (requires flash-attn-3 installed)
+Checkpoint mapping
+-------------------
+  sam3.pt             → Sam3VideoPredictorMultiGPU   (old, main branch)
+  sam3.1_multiplex.pt → build_sam3_multiplex_video_predictor (sam3.1 branch, used here)
 
 SAM2 fallback
 --------------
@@ -74,8 +70,8 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3.1")
-CHECKPOINT_FILENAME: str = os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1_multiplex.pt")
+MODEL_ID: str = os.getenv("SAM3_VIDEO_MODEL_ID", os.getenv("SAM3_MODEL_ID", "facebook/sam3.1"))
+CHECKPOINT_FILENAME: str = os.getenv("SAM3_VIDEO_CHECKPOINT_FILENAME", os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1_multiplex.pt"))
 MODEL_DIR: str = os.getenv("SAM3_MODEL_DIR", os.getenv("MODEL_DIR", "/data/models"))
 MAX_FRAMES_TO_TRACK: int = int(os.getenv("MAX_FRAMES_TO_TRACK", "10"))
 
@@ -84,14 +80,10 @@ ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
 ENABLE_FA3: bool = os.getenv("SAM3_ENABLE_FA3", "false").lower() == "true"
 
 # ── CUDA optimisations ─────────────────────────────────────────────────────────
-# NOTE: Set TF32 flags unconditionally — ignored on pre-Ampere GPUs, safe to set.
-# Do NOT call torch.cuda.get_device_properties() here: that initialises CUDA in
-# the gunicorn master process before fork(), causing RuntimeError in every worker.
-if DEVICE == "cuda":
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-
-_autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if DEVICE == "cuda" else None
+# TF32 and autocast setup is deferred to _ensure_loaded() (after gunicorn fork).
+# Do NOT call torch.cuda.get_device_properties() here — it initialises CUDA in
+# the gunicorn master process, causing RuntimeError in every forked worker.
+_autocast_kwargs: Optional[dict] = None  # set in _ensure_loaded after fork
 
 # ── Checkpoint download ────────────────────────────────────────────────────────
 def _download_with_progress(
@@ -166,21 +158,31 @@ def _ensure_loaded() -> None:
         if _predictor is not None:
             return
 
-        # ── Reset CUDA state for forked workers (same as sam3-image) ─────
+        # ── Reset CUDA state for forked workers ───────────────────────────
         import torch.cuda as _cuda
         _cuda._in_bad_fork = False
         _cuda._initialized = False
 
-        try:
-            from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU  # type: ignore[import]
+        # ── CUDA optimisations (safe here — after fork, CUDA not yet init) ─
+        global _autocast_kwargs
+        if DEVICE == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            # TF32 only effective on Ampere (sm_80+); safe to set on sm_70 (TITAN V),
+            # PyTorch honours the flag only when hardware supports it.
+            # bfloat16 autocast: valid on Volta (sm_70) and above.
+            _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16}
 
-            logger.info("Loading SAM3 video predictor on %s …", DEVICE)
-            _predictor = Sam3VideoPredictorMultiGPU(
+        try:
+            from sam3.model_builder import build_sam3_multiplex_video_predictor  # type: ignore[import]
+
+            logger.info("Loading SAM3 multiplex video predictor on %s …", DEVICE)
+            _predictor = build_sam3_multiplex_video_predictor(
                 checkpoint_path=_checkpoint_path,
+                use_fa3=ENABLE_FA3,
                 async_loading_frames=True,
-                video_loader_type="cv2",
             )
-            logger.info("SAM3 video predictor loaded.")
+            logger.info("SAM3 multiplex video predictor loaded.")
 
         except ImportError as err:
             _USING_SAM2_FALLBACK = True

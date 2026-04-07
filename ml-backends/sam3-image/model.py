@@ -51,8 +51,8 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3.1")
-CHECKPOINT_FILENAME: str = os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1_multiplex.pt")
+MODEL_ID: str = os.getenv("SAM3_IMAGE_MODEL_ID", os.getenv("SAM3_MODEL_ID", "facebook/sam3.1"))
+CHECKPOINT_FILENAME: str = os.getenv("SAM3_IMAGE_CHECKPOINT_FILENAME", os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.pt"))
 MODEL_DIR: str = os.getenv("SAM3_MODEL_DIR", os.getenv("MODEL_DIR", "/data/models"))
 
 # PCS / text-prompt feature gate
@@ -63,18 +63,9 @@ CONFIDENCE_THRESHOLD: float = float(os.getenv("SAM3_CONFIDENCE_THRESHOLD", "0.5"
 RETURN_ALL_MASKS: bool = os.getenv("SAM3_RETURN_ALL_MASKS", "false").lower() == "true"
 
 # ── CUDA optimisations ─────────────────────────────────────────────────────────
-# NOTE: Set TF32 flags unconditionally — ignored on pre-Ampere GPUs, safe to set.
-# Do NOT call torch.cuda.get_device_properties() here: that initialises CUDA in
-# the gunicorn master process. After fork(), PyTorch raises
-#   "Cannot re-initialize CUDA in forked subprocess"
-# in every worker. All CUDA initialisation must be deferred until after fork.
-if DEVICE == "cuda":
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-
-# autocast context reused per inference call (module-scope context managers are
-# not safe across fork — enter/exit is done inside _predict_sam3/_predict_sam2)
-_autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16} if DEVICE == "cuda" else None
+# Deferred to _ensure_loaded() — after gunicorn fork — so CUDA is never
+# initialised in the master process.  Do NOT call get_device_properties() here.
+_autocast_kwargs: Optional[dict] = None  # set in _ensure_loaded after fork
 
 # ── Checkpoint download ────────────────────────────────────────────────────────
 def _download_with_progress(
@@ -164,6 +155,15 @@ def _ensure_loaded() -> None:
         import torch.cuda as _cuda
         _cuda._in_bad_fork = False
         _cuda._initialized = False
+
+        # ── CUDA optimisations (safe here — after fork, before CUDA init) ──
+        global _autocast_kwargs
+        if DEVICE == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            # TF32 only effective on Ampere (sm_80+); harmless on Volta (sm_70).
+            # bfloat16 autocast valid from Volta (sm_70) onward.
+            _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16}
 
         try:
             from sam3.model_builder import build_sam3_image_model           # type: ignore[import]

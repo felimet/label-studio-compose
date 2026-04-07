@@ -52,7 +52,11 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     pip install -r requirements.txt
 
 # ── SAM3 from source (no PyPI package) ───────────────────────
-ARG SAM3_COMMIT=main
+# Branch / commit selection:
+#   sam3.1  → matches sam3.1_multiplex.pt (tracker.model.* keys, dual backbone)
+#   main    → old flat-key architecture; incompatible with any current HF checkpoint
+# Override via docker-compose.ml.yml build.args or --build-arg SAM3_COMMIT=<ref>
+ARG SAM3_COMMIT=sam3.1
 RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     git clone --depth 1 --branch ${SAM3_COMMIT} \
         https://github.com/facebookresearch/sam3.git /sam3 \

@@ -20,6 +20,10 @@ services:
     build:
       context: ./ml-backends/sam3-image
       dockerfile: Dockerfile
+      args:
+        # sam3.1 → matches sam3.1_multiplex.pt / current HF checkpoints
+        # main   → old architecture, incompatible with current checkpoints
+        SAM3_COMMIT: sam3.1
     restart: unless-stopped
     env_file:
       - .env.ml
@@ -28,7 +32,7 @@ services:
       - MODEL_DIR=/data/models
       - PORT=9090
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - hf-cache:/home/appuser/.cache/huggingface
       - sam3-image-models:/data/models
       - ./ml-backends/sam3-image/model.py:/app/model.py:ro
     deploy:
@@ -36,7 +40,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
@@ -55,6 +59,8 @@ services:
     build:
       context: ./ml-backends/sam3-video
       dockerfile: Dockerfile
+      args:
+        SAM3_COMMIT: sam3.1
     restart: unless-stopped
     env_file:
       - .env.ml
@@ -63,7 +69,7 @@ services:
       - MODEL_DIR=/data/models
       - PORT=9090
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - hf-cache:/home/appuser/.cache/huggingface
       - sam3-video-models:/data/models
       - ./ml-backends/sam3-video/model.py:/app/model.py:ro
     deploy:
@@ -71,7 +77,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]

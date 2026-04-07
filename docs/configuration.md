@@ -87,16 +87,22 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 | 變數 | 說明 |
 |------|------|
 | `LABEL_STUDIO_API_KEY` | 兩個 SAM3 後端共用的 LS API 金鑰。**必須使用 Legacy Token**（LS UI → Account & Settings → Legacy Token）。ML backend SDK 以 `Authorization: Token <key>` 格式驗證，Personal Access Token（JWT Bearer）會導致 401。此值與 `.env` 的 `LABEL_STUDIO_USER_TOKEN` 相同 |
-| `HF_TOKEN` | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
+| `HF_TOKEN` | HuggingFace Token；下載 SAM3 模型必填（需先接受 Meta 授權） |
 
 ### 模型設定
 
+影像與影片後端使用**不同架構**的 checkpoint，請分別設定：
+
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM3_MODEL_ID` | `facebook/sam3.1` | HuggingFace Hub 模型 ID（影像與影片後端共用） |
-| `SAM3_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | 模型 checkpoint 檔名（與 `SAM3_MODEL_ID` 配對，約 3.5 GB） |
+| `SAM3_IMAGE_MODEL_ID` | `facebook/sam3` | 影像後端 HuggingFace Hub 模型 ID |
+| `SAM3_IMAGE_CHECKPOINT_FILENAME` | `sam3.pt` | 影像後端 checkpoint（約 3.45 GB）。對應 `build_sam3_image_model`，**無 SAM3.1 影像版本** |
+| `SAM3_VIDEO_MODEL_ID` | `facebook/sam3.1` | 影片後端 HuggingFace Hub 模型 ID |
+| `SAM3_VIDEO_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | 影片後端 checkpoint（約 3.5 GB）。對應 `build_sam3_multiplex_video_predictor` |
 | `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援，極慢）。CUDA 需 NVIDIA driver ≥ 535.x |
 | `MODEL_DIR` | `/data/models` | 容器內模型 checkpoint 的快取目錄。由 `docker-compose.ml.yml` 靜態設定（`sam3-image-models` / `sam3-video-models` Volume 掛載至此），通常不需修改 |
+
+> 若未設定 `SAM3_IMAGE_*` / `SAM3_VIDEO_*`，會 fallback 讀取共用的 `SAM3_MODEL_ID` / `SAM3_CHECKPOINT_FILENAME`（向下相容）。
 
 ### 影片後端設定
 
@@ -116,7 +122,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM3_ENABLE_FA3` | `false` | 啟用 Flash Attention 3 推論加速。需兩步驟：1) `docker compose build --build-arg ENABLE_FA3=true sam3-video-backend`；2) 此處設 `true`。僅支援 Ampere（A100、RTX 3090）以上 GPU |
+| `SAM3_ENABLE_FA3` | `true` | 啟用 Flash Attention 3 推論加速。需兩步驟：1) `docker compose build --build-arg ENABLE_FA3=true sam3-video-backend`；2) 此處設 `true`。**僅支援 Ampere（sm_80+，A100、RTX 3090）以上**；Volta（sm_70，TITAN V）自動退回 math kernel，可安全設 `true` 但無實際加速 |
 
 ### Gunicorn 並發設定
 
@@ -139,8 +145,8 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 ### 說明
 
 - 兩個後端各自維護獨立的 `sam3-image-models` / `sam3-video-models` Volume 儲存下載的權重（均掛載至容器內 `/data/models`）。
-- 共用 `hf-cache` Volume（掛載至 `/root/.cache/huggingface`）避免重複下載 HF 元資料。
-- 首次啟動下載約 3.5 GB 權重；健康檢查設 `start_period: 300s` 留足緩衝。
+- 共用 `hf-cache` Volume（掛載至 `/home/appuser/.cache/huggingface`，對應 Dockerfile 的 `HF_HOME` 設定）避免重複下載 HF 元資料。
+- 首次啟動：影像後端下載 ~3.45 GB，影片後端下載 ~3.5 GB；健康檢查設 `start_period: 300s` 留足緩衝。
 
 ## 產生強密碼
 
