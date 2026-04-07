@@ -93,6 +93,10 @@ DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_ID: str = os.getenv("SAM3_VIDEO_MODEL_ID", os.getenv("SAM3_MODEL_ID", "facebook/sam3.1"))
 CHECKPOINT_FILENAME: str = os.getenv("SAM3_VIDEO_CHECKPOINT_FILENAME", os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1_multiplex.pt"))
 MAX_FRAMES_TO_TRACK: int = int(os.getenv("MAX_FRAMES_TO_TRACK", "10"))
+# Cap the long side of extracted frames to reduce VRAM usage.
+# SAM3's ViT attention is O(spatial_tokens²) — halving resolution cuts VRAM ~4×.
+# 0 = no resize (original resolution). Recommended: 1024 for 1080p+ videos.
+MAX_FRAME_LONG_SIDE: int = int(os.getenv("MAX_FRAME_LONG_SIDE", "1024"))
 
 ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
 # Flash Attention 3 — only effective when sam3 package is installed
@@ -388,6 +392,11 @@ class NewModel(LabelStudioMLBase):
 
         Returns (sequence, all_obj_ids, score_lines).
         """
+        import gc
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
+            gc.collect()
+
         ctx = torch.autocast(**_autocast_kwargs) if _autocast_kwargs else None
         if ctx:
             ctx.__enter__()
@@ -396,6 +405,9 @@ class NewModel(LabelStudioMLBase):
         finally:
             if ctx:
                 ctx.__exit__(None, None, None)
+            if DEVICE == "cuda":
+                torch.cuda.empty_cache()
+                gc.collect()
 
     def _predict_sam3_inner(
         self,
@@ -827,8 +839,10 @@ class NewModel(LabelStudioMLBase):
         """Extract frames [start_frame, end_frame) to frame_dir as JPEG images.
 
         Files are named 00000.jpg, 00001.jpg, … (relative index from start_frame).
+        If MAX_FRAME_LONG_SIDE > 0, frames are downscaled so the long side ≤
+        MAX_FRAME_LONG_SIDE before saving — cuts SAM3 ViT VRAM usage significantly
+        (halving resolution reduces attention map memory ~4×).
         Returns the number of frames actually written.
-        Used by the SAM3 path to avoid loading the entire video into RAM.
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -840,6 +854,14 @@ class NewModel(LabelStudioMLBase):
             ok, frame = cap.read()
             if not ok:
                 break
+            if MAX_FRAME_LONG_SIDE > 0:
+                h, w = frame.shape[:2]
+                long_side = max(h, w)
+                if long_side > MAX_FRAME_LONG_SIDE:
+                    scale = MAX_FRAME_LONG_SIDE / long_side
+                    new_w = max(1, int(w * scale))
+                    new_h = max(1, int(h * scale))
+                    frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
             cv2.imwrite(os.path.join(frame_dir, f"{rel_idx:05d}.jpg"), frame)
             count += 1
         cap.release()
