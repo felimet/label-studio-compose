@@ -19,23 +19,16 @@ SAM3 image API (facebookresearch/sam3)
   state["scores"]  → float tensor [N]
   state["boxes"]   → float tensor [N, 4]  (pixel xyxy)
 
-Three predict paths
---------------------
+Three predict paths (all via Sam3Processor)
+--------------------------------------------
   1. Text-only  : set_text_prompt only
-  2. Geo-only   : add_geometric_prompt only (model auto-adds 'visual' dummy text)
+  2. Geo-only   : add_geometric_prompt only
   3. Mixed      : set_text_prompt first, then add_geometric_prompt
-
-SAM2 fallback
---------------
-  When sam3 package is not installed, falls back to SAM2ImagePredictor which
-  has the classic (masks, scores, logits) tuple interface. Text prompts are
-  silently ignored with a WARNING in that mode.
 """
 from __future__ import annotations
 
 import logging
 import os
-import sys
 import threading
 from typing import List, Dict, Optional
 from urllib.parse import urlparse, urlunparse
@@ -143,15 +136,13 @@ except Exception as _hf_err:
 # _ensure_loaded() is called at the start of predict() — i.e. inside the worker
 # process, after gunicorn has already forked. CUDA is then initialised cleanly
 # in each worker.
-_processor = None          # Sam3Processor (PCS + geo) or SAM2ImagePredictor (fallback)
-_sam2_geo_predictor = None # SAM2ImagePredictor — geo-only prompts, spatially constrained
-_USING_SAM2_FALLBACK: bool = False
+_processor = None   # Sam3Processor
 _init_lock = threading.Lock()
 
 
 def _ensure_loaded() -> None:
-    """Load SAM3 (or SAM2 fallback) model on first call inside the worker process."""
-    global _processor, _sam2_geo_predictor, _USING_SAM2_FALLBACK
+    """Load SAM3 model on first call inside the worker process."""
+    global _processor
     if _processor is not None:
         return
     with _init_lock:
@@ -178,58 +169,25 @@ def _ensure_loaded() -> None:
             # bfloat16 autocast valid from Volta (sm_70) onward.
             _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16}
 
-        try:
-            from sam3.model_builder import build_sam3_image_model           # type: ignore[import]
-            from sam3.model.sam3_image_processor import Sam3Processor       # type: ignore[import]
+        from sam3.model_builder import build_sam3_image_model           # type: ignore[import]
+        from sam3.model.sam3_image_processor import Sam3Processor       # type: ignore[import]
 
-            logger.info("Loading SAM3 image model on %s …", DEVICE)
-            _sam_model = build_sam3_image_model(
-                checkpoint_path=_checkpoint_path,
-                device=DEVICE,
-                eval_mode=True,
-                enable_segmentation=True,
-                enable_inst_interactivity=False,
-                compile=False,
-            )
-            _processor = Sam3Processor(
-                _sam_model,
-                resolution=1008,
-                device=DEVICE,
-                confidence_threshold=CONFIDENCE_THRESHOLD,
-            )
-            # SAM3 image model is SAM2-compatible. Wrapping with SAM2ImagePredictor
-            # shares the same weights (no extra VRAM) and gives spatially-constrained
-            # box/point segmentation — used when there is NO text prompt.
-            _sam3_src = "/sam3"
-            if _sam3_src not in sys.path:
-                sys.path.insert(0, _sam3_src)
-            from sam2.sam2_image_predictor import SAM2ImagePredictor        # type: ignore[import]
-            _sam2_geo_predictor = SAM2ImagePredictor(_sam_model)            # type: ignore[assignment]
-            logger.info("SAM3 image model loaded (PCS enabled=%s).", ENABLE_PCS)
-
-        except ImportError as err:
-            _USING_SAM2_FALLBACK = True
-            logger.warning(
-                "sam3 package import failed (%s) — falling back to SAM2ImagePredictor "
-                "bundled inside the sam3 source tree. "
-                "Text prompts (PCS) will be IGNORED.",
-                err,
-            )
-            # SAM3 is installed from source at /sam3; SAM2 lives at /sam3/sam2/.
-            _sam3_src = "/sam3"
-            if _sam3_src not in sys.path:
-                sys.path.insert(0, _sam3_src)
-            from sam2.build_sam import build_sam2                           # type: ignore[import]
-            from sam2.sam2_image_predictor import SAM2ImagePredictor        # type: ignore[import]
-
-            _sam2_model = build_sam2(
-                os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
-                _checkpoint_path,
-                device=DEVICE,
-            )
-            _processor = SAM2ImagePredictor(_sam2_model)                   # type: ignore[assignment]
-            _sam2_geo_predictor = _processor
-            logger.info("SAM2 image predictor loaded (SAM3 fallback).")
+        logger.info("Loading SAM3 image model on %s …", DEVICE)
+        _sam_model = build_sam3_image_model(
+            checkpoint_path=_checkpoint_path,
+            device=DEVICE,
+            eval_mode=True,
+            enable_segmentation=True,
+            enable_inst_interactivity=False,
+            compile=False,
+        )
+        _processor = Sam3Processor(
+            _sam_model,
+            resolution=1008,
+            device=DEVICE,
+            confidence_threshold=CONFIDENCE_THRESHOLD,
+        )
+        logger.info("SAM3 image model loaded (PCS enabled=%s).", ENABLE_PCS)
 
 
 # ── Backend ────────────────────────────────────────────────────────────────────
@@ -332,7 +290,7 @@ class NewModel(LabelStudioMLBase):
             [(b, "+" if p else "-") for b, p in input_boxes], selected_label,
         )
 
-        has_text = ENABLE_PCS and text_prompt is not None and not _USING_SAM2_FALLBACK
+        has_text = ENABLE_PCS and text_prompt is not None
         has_geo  = bool(point_coords) or bool(input_boxes)
 
         # Text-only (no geometry) → store silently, do NOT run inference.
@@ -379,31 +337,9 @@ class NewModel(LabelStudioMLBase):
         image = np.array(pil_img)
 
         # ── Run predictor ──────────────────────────────────────────────────────
-        # Routing:
-        #   SAM2 (spatially constrained): geo-only, single positive box or points
-        #   SAM3 (PCS): text prompt, multiple boxes, or any negative (Exclude) box
-        #   Fallback: SAM2ImagePredictor for all prompts when SAM3 unavailable
-        has_negative_box = any(not is_pos for _, is_pos in input_boxes)
-        has_multi_box    = len(input_boxes) > 1
-        use_sam2 = (
-            not _USING_SAM2_FALLBACK
-            and has_geo
-            and not has_text
-            and not has_negative_box
-            and not has_multi_box
-        )
-        # SAM2 only supports a single box; extract it (or None if points-only)
-        single_box = input_boxes[0][0] if input_boxes else None
-
+        # All paths go through Sam3Processor (text, geo-only, text+geo).
         try:
-            if _USING_SAM2_FALLBACK or use_sam2:
-                return self._predict_sam2(
-                    image, point_coords, point_labels, single_box,
-                    selected_label, image_width, image_height,
-                    from_name, to_name,
-                )
-            else:
-                return self._predict_sam3(
+            return self._predict_sam3(
                     image, text_prompt, point_coords, point_labels, input_boxes,
                     selected_label, image_width, image_height,
                     from_name, to_name,
@@ -566,97 +502,3 @@ class NewModel(LabelStudioMLBase):
             "score":         best_score,
         }])
 
-    # ── SAM2 fallback path ─────────────────────────────────────────────────────
-
-    def _predict_sam2(
-        self,
-        image: np.ndarray,
-        point_coords: list,
-        point_labels: list,
-        input_box: Optional[list],
-        selected_label: Optional[str],
-        image_width: int,
-        image_height: int,
-        from_name: str,
-        to_name: str,
-    ) -> ModelResponse:
-        """Run SAM2 SAM2ImagePredictor pipeline (text prompts not supported)."""
-        ctx = torch.autocast(**_autocast_kwargs) if _autocast_kwargs else None
-        if ctx:
-            ctx.__enter__()
-        try:
-            return self._predict_sam2_inner(
-                image, point_coords, point_labels, input_box,
-                selected_label, image_width, image_height, from_name, to_name,
-            )
-        finally:
-            if ctx:
-                ctx.__exit__(None, None, None)
-
-    def _predict_sam2_inner(
-        self,
-        image: np.ndarray,
-        point_coords: list,
-        point_labels: list,
-        input_box: Optional[list],
-        selected_label: Optional[str],
-        image_width: int,
-        image_height: int,
-        from_name: str,
-        to_name: str,
-    ) -> ModelResponse:
-        _sam2_geo_predictor.set_image(image)  # type: ignore[attr-defined]
-
-        np_points = np.array(point_coords, dtype=np.float32) if point_coords else None
-        np_labels = np.array(point_labels, dtype=np.float32) if point_labels else None
-        np_box    = np.array(input_box,    dtype=np.float32) if input_box    else None
-
-        masks, scores, _ = _sam2_geo_predictor.predict(  # type: ignore[attr-defined]
-            point_coords=np_points,
-            point_labels=np_labels,
-            box=np_box,
-            multimask_output=True,
-        )
-        # Sort by score descending, take best
-        sorted_idx = np.argsort(scores)[::-1]
-        for rank, i in enumerate(sorted_idx):
-            logger.info("  [SAM2-geo] candidate %d  score=%.4f", rank, float(scores[i]))
-
-        best_idx   = int(sorted_idx[0])
-        best_mask  = masks[best_idx].astype(np.uint8)
-        best_score = float(scores[best_idx])
-        logger.info("[SAM2-geo] returning mask, score=%.4f", best_score)
-
-        score_lines = [f"#{r}  score={float(scores[i]):.4f}" for r, i in enumerate(sorted_idx)]
-        score_lines[0] += "  ← selected"
-
-        rle = brush.mask2rle(best_mask * 255)
-        return ModelResponse(predictions=[{
-            "result": [
-                {
-                    "id":             str(uuid4())[:4],
-                    "from_name":      from_name,
-                    "to_name":        to_name,
-                    "type":           "brushlabels",
-                    "original_width":  image_width,
-                    "original_height": image_height,
-                    "image_rotation":  0,
-                    "value": {
-                        "format":      "rle",
-                        "rle":         rle,
-                        "brushlabels": [selected_label] if selected_label else [],
-                    },
-                    "score":    best_score,
-                    "readonly": False,
-                },
-                {
-                    "id":        str(uuid4())[:4],
-                    "from_name": "scores",
-                    "to_name":   to_name,
-                    "type":      "textarea",
-                    "value":     {"text": ["\n".join(score_lines)]},
-                },
-            ],
-            "model_version": self.get("model_version"),
-            "score":         best_score,
-        }])
