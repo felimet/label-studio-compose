@@ -42,3 +42,4 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 *.swp
+ls-data/
