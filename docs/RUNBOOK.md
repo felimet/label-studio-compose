@@ -185,53 +185,75 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
 # 應該沒有輸出；若有 --preload 須移除
 ```
 
-### SAM3 video backend — GPU 架構太舊 (sm_61 / Pascal)，Triton kernel 無法編譯
+### SAM3 後端 — Pascal / Volta GPU（sm_61 / sm_70）
 
-**症狀**：video backend 啟動後第一次呼叫 predict 即失敗，log 出現大量：
-
-```
-Feature '.acq_rel' requires .target sm_70 or higher
-```
-
-加上 traceback 最後指向：
+**行為**：啟動時記錄 `WARNING`，不再 raise RuntimeError。後端繼續嘗試載入模型。
 
 ```
-sam3/sam3/perflib/triton/connected_components.py::connected_components_triton
-ptxas fatal: Unsupported .target sm_61
+WARNING  GPU compute capability sm_60 detected (Pascal or lower) —
+inference may fail if _addmm_activation bfloat16 kernel is absent on this GPU.
 ```
 
-**根因**：SAM3 video predictor 的 connected components 後處理是用 Triton 寫的自訂 kernel，kernel 內使用 `.acq_rel` 記憶體語意（需要 Volta 以上 `sm_70+`）。Pascal 世代（GTX 1080Ti / P40 等 `sm_61`）的 ptxas 直接拒絕編譯，與任何參數設定無關，純粹是硬體世代不符。
+**實際狀況**（依 branch）：
 
-> 為什麼 **image backend 正常**：image 推論路徑只用標準 PyTorch kernel，不碰 Triton 的 connected components，因此舊卡可以跑。
+| Branch / 後端 | Pascal sm_61 | Volta sm_70/72 |
+|---------------|-------------|----------------|
+| Image（sam3 main，`build_sam3_image_model`） | **可用**（GTX 1080 實測正常）— main branch 推論路徑不呼叫 `addmm_act` | 可用 |
+| Video（sam3.1，`build_sam3_multiplex_video_predictor`） | 有可能失敗：若推論路徑觸發 `addmm_act bfloat16` kernel 缺失 | 同左 |
+| Video（sam3 main，`build_sam3_video_predictor`） | 與 image backend 相同架構，預期可用 | 可用 |
 
-**解法選項**（按推薦優先）：
-
-| 方案 | 說明 | 工程量 | 風險 |
-|------|------|--------|------|
-| 換 GPU（`sm_70+`，V100 / RTX 20xx 以後） | 官方支援路徑；換卡後照正常流程跑 | 中（硬體 + driver 更新） | 低 |
-| 改 SAM3 — 把 Triton kernel 換成 PyTorch 備援 | 偵測 `torch.cuda.get_device_capability() < (7, 0)` 時走 `scipy.ndimage.label` 或純 PyTorch 版 | 高（需理解 perflib 邏輯） | 中 |
-| 只用 image 路徑，自行實作 tracking | 用 SAM3 image 做逐 frame segmentation，tracking 改用 IoU matching / Kalman filter | 中 | 低 |
-| 改用不依賴 Triton 的 video segmentation 模型 | DeAOT / XMem / Mask2Former 等純 PyTorch 實作，對舊卡友好 | 中 | 低 |
-
-**不建議**：嘗試欺騙 ptxas 把 target 改成 `sm_70`——即使能編過，Pascal 硬體實際上不支援這些 memory ordering feature，runtime 行為不可預測。
-
-**確認你的 GPU compute capability**：
+**確認 GPU compute capability**：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.ml.yml \
-  exec sam3-video-backend python -c \
+  exec sam3-image-backend python -c \
   "import torch; print(torch.cuda.get_device_properties(0))"
-# sm_61 = Pascal (GTX 1080Ti / Titan Xp 等) → 無法跑 SAM3 video
-# sm_70+ = Volta 以後 → OK
+# sm_61 = Pascal (GTX 10xx)
+# sm_70 = Volta (TITAN V, V100)
+# sm_75 = Turing (RTX 20xx, T4) → 完整官方支援起點
+# sm_80+ = Ampere 以後 → 完整支援 + TF32
 ```
+
+**若 video backend 在 Pascal 推論失敗**：
+
+```
+CUDA error: no kernel image is available for execution on the device
+```
+
+切換為 sam3 main branch checkpoint：在 `.env.ml` 設定
+```
+SAM3_VIDEO_MODEL_ID=facebook/sam3
+SAM3_VIDEO_CHECKPOINT_FILENAME=sam3.pt
+```
+並重建映像（SAM3_COMMIT=main）。
 
 ### SAM3 backend — CUDA out of memory
 
-Reduce concurrent workers (already set to 1 in Dockerfile CMD). If OOM still occurs:
+SAM3 backends include automatic GPU memory management:
+
+1. **GPU Idle Release**: Model is automatically unloaded from VRAM after `GPU_IDLE_TIMEOUT_SECS` (default 3600 seconds = 1 hour) of inactivity. To adjust:
+   ```bash
+   # In .env.ml or docker-compose.ml.yml:
+   GPU_IDLE_TIMEOUT_SECS=1800    # 30 minutes
+   GPU_IDLE_TIMEOUT_SECS=300     # 5 minutes (more aggressive)
+   ```
+
+2. **GPU Precision Auto-Detection**: Backends automatically detect GPU compute capability at startup:
+   - **sm_80+ (Ampere, RTX 30xx, A100, etc.)**: bfloat16 autocast + TF32
+   - **sm_75–79 (Turing, RTX 20xx, T4)**: bfloat16 autocast — **minimum supported**
+   - **sm_70–72 (Volta) / sm_61 and below (Pascal)**: soft warning at startup — `_setup_precision()` logs a warning; model loading proceeds. Image backend (sam3 main branch) confirmed working on Pascal sm_61 (GTX 1080). Video backend (sam3.1) may fail at inference if `_addmm_activation` bfloat16 kernel is missing; switch to sam3 main `sam3.pt` as workaround.
+
+3. **Multi-GPU Support** (both backends):
+   - Pin each backend to one or more GPUs via `SAM3_IMAGE_GPU_INDEX` / `SAM3_VIDEO_GPU_INDEX` in `.env.ml`
+   - gunicorn `post_fork` assigns one GPU per worker: worker *i* → `gpus[i-1]`, so `cuda:0` inside each worker = its assigned physical GPU
+   - Set `SAM3_IMAGE_WORKERS` / `SAM3_VIDEO_WORKERS` equal to the number of GPUs in the corresponding index list
+
+If OOM still occurs after these settings:
 
 1. Close other GPU workloads
-2. Use `DEVICE=cpu` in `.env.ml` (very slow, no GPU required)
-3. Try a smaller model: set `SAM3_MODEL_ID=facebook/sam3` and `SAM3_CHECKPOINT_FILENAME=sam3.pt` in `.env.ml`
+2. Lower `GPU_IDLE_TIMEOUT_SECS` to unload the model faster when idle
+3. Use `DEVICE=cpu` in `.env.ml` (very slow, no GPU required)
+4. Try a smaller model: set `SAM3_MODEL_ID=facebook/sam3` and `SAM3_CHECKPOINT_FILENAME=sam3.pt` in `.env.ml`
 
 ### Cloud Storage 概念速查
 
@@ -337,7 +359,7 @@ docker compose logs label-studio 2>&1 | jq 'select(.level=="ERROR")'
 
 ```bash
 # Label Studio 標注資料 + Local files
-tar -czf ls-data-$(date +%Y%m%d).tar.gz ./label-studio-data/
+tar -czf ls-data-$(date +%Y%m%d).tar.gz ./ls-data/
 
 # PostgreSQL — 必須用 pg_dump（postgres-data/ 是內部格式，直接複製無法還原）
 docker compose exec db pg_dump -U labelstudio labelstudio \

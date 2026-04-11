@@ -9,6 +9,9 @@ VideoRectangle tracking + optional text (PCS) prompts using [SAM 3.1](https://gi
 - **Exclude box**: `Labels value="Exclude"` on a VideoRectangle → `bounding_box_labels=[0]` (negative prompt).
 - **Scores display**: `add_prompt` responses written to `TextArea name="scores"` after each prediction.
 - **SAM2 fallback**: if `sam3` package is unavailable, falls back to SAM2 video predictor; text prompts are ignored with a WARNING in that mode.
+- **Automatic GPU precision**: Detects GPU compute capability and uses optimal precision (TF32, bfloat16, or fp32)
+- **GPU idle release**: Automatically unloads model after inactivity timeout (default 1 hour)
+- **Memory-efficient frame extraction**: Only loads needed frames into RAM to prevent OOM on long/high-resolution videos
 
 ## Usage
 
@@ -28,6 +31,7 @@ VideoRectangle tracking + optional text (PCS) prompts using [SAM 3.1](https://gi
 | `HF_TOKEN` | — | HF gated token (required) |
 | `SAM3_ENABLE_PCS` | `true` | Enable text prompts. Supports text-only (no box required) and text+box mixed mode. Set `false` for geometry-only tracking. |
 | `SAM3_ENABLE_FA3` | `false` | Flash Attention 3 (requires `--build-arg ENABLE_FA3=true` at build time) |
+| `GPU_IDLE_TIMEOUT_SECS` | `3600` | Seconds of inactivity before model is unloaded from VRAM (default: 1 hour). Set lower (e.g., `300`) to release GPU memory more aggressively |
 
 ## Predict Paths
 
@@ -62,6 +66,17 @@ extract frames → start_session (image folder) → add_prompt (per frame) → p
 | Empty prediction, WARNING in logs: `propagate_in_video raised an error` | SAM3 internal error (no detections or boundary condition) | Expected for zero-detection cases; check that prompts cover at least one object |
 | `start_session` rejects the file | Extension-less cache file symlink failed | Check container filesystem permissions; ensure `video_path` directory is writable |
 | Text prompt ignored, WARNING in logs | `sam3` package not installed; SAM2 fallback active | Rebuild image with `sam3.1` branch; or use geometric prompts only |
+
+## References
+
+- **Official SAM3 Repository**: https://github.com/facebookresearch/sam3
+- **SAM2 Fallback**: https://github.com/facebookresearch/sam2
+- **SAM3.1 Model Card (HuggingFace)**: https://huggingface.co/facebook/sam3.1
+- **Label Studio ML Backend Examples**: https://github.com/HumanSignal/label-studio-ml-backend/tree/master/label_studio_ml/examples/segment_anything_2_video
+
+For detailed SAM3/SAM3.1 architecture, checkpoints, and advanced configuration, refer to the official facebookresearch/sam3 repository and HuggingFace model card.
+
+**GPU Hardware Notes**: Precision configuration adapts to your GPU automatically based on compute capability (Ampere sm_80+ uses TF32, Volta sm_70-79 uses bfloat16, Pascal sm_61 uses fp32).
 
 ## Tests
 

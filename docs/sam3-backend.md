@@ -14,10 +14,10 @@ SAM3（Segment Anything Model 3）是 Meta 於 2025 年 11 月釋出的下一代
 3. NVIDIA GPU，VRAM ≥ 8 GB（bfloat16 推論，torch 2.7 + CUDA 12.6）
 4. 主機已安裝 `nvidia-container-toolkit`
 
-> **SAM3 與 SAM2 的差異**：SAM3 使用 `facebookresearch/sam3`（源碼安裝，非 HuggingFace transformers）。
+> **SAM3 安裝方式**：`facebookresearch/sam3`（源碼安裝，非 HuggingFace transformers）。
 > 影像端：`build_sam3_image_model()` + `Sam3Processor`（state-dict API，`set_image → set_text_prompt / add_geometric_prompt`）
-> 影片端：`Sam3VideoPredictorMultiGPU`（session-based API，`handle_request / handle_stream_request`）
-> 不需手動 cv2 畫格分割——SAM3 影片端以 `video_loader_type="cv2"` 在內部處理。
+> 影片端（優先）：`build_sam3_multiplex_video_predictor()`（sam3.1 branch，`sam3.1_multiplex.pt`）
+> 影片端（回退）：`build_sam3_video_predictor()`（sam3 main branch，`sam3.pt`）— 自動偵測，兩者均使用 `handle_request / handle_stream_request` API 並支援 PCS 文字提示。
 
 ## 架構：Lazy Model Loading
 
@@ -41,7 +41,7 @@ make test-sam3-image    # 在容器內執行影像後端 pytest
 make test-sam3-video    # 在容器內執行影片後端 pytest
 ```
 
-首次啟動時，容器從 HuggingFace Hub 下載 `facebook/sam3.1` 權重（約 3.5 GB）至 `sam3-image-models` / `sam3-video-models` Docker Volume。健康檢查 `start_period: 300s`，下載期間不觸發重啟。
+首次啟動時，容器從 HuggingFace Hub 下載 `facebook/sam3.1` 權重（約 3.5 GB）至共用的 `hf-cache` Docker Volume（`/home/appuser/.cache/huggingface`）。健康檢查 `start_period: 300s`，下載期間不觸發重啟。
 
 ## 連接至 Label Studio
 
@@ -168,29 +168,96 @@ Label Studio（渲染多畫格追蹤框）
 | 限制 | 說明 |
 |------|------|
 | 追蹤長度上限 | 最多 `MAX_FRAMES_TO_TRACK` 畫格（預設 10） |
-| Flash Attention 3 | 需 build-time `--build-arg ENABLE_FA3=true` 且設 `SAM3_ENABLE_FA3=true` |
-| SAM2 fallback 文字提示 | SAM2 不支援 PCS，文字提示記 WARNING 並被忽略 |
+| Pascal / Volta GPU | sm_61 (GTX 1080) 在 image backend（sam3 main branch）實測可用；video backend（sam3.1）若推論時觸發 `addmm_act` kernel 缺失則失敗，改用 `sam3.pt` (sam3 main) 可解 |
+| Flash Attention 3 | 需 build-time `--build-arg ENABLE_FA3=true` 且設 `SAM3_ENABLE_FA3=true`；需 sm_90+（Hopper H100/H800） |
 | gunicorn `--preload` | **禁止使用**。`--preload` 在 master 程序載入 app，觸發 CUDA 初始化，fork 後所有 worker 失敗 |
 
 ## Flash Attention 3（選用加速）
 
-FA3 可大幅提升影片推論速度（主要對 Transformer attention 有效），適用於 Ampere 及以後的 GPU（A100、RTX 3090 等）。
+FA3 可大幅提升影片推論速度（主要對 Transformer attention 有效），**僅支援 NVIDIA Hopper（H100/H800，sm_90+）**；`flash_attn_interface` 非 pip 套件，需自行 build。
 
-**注意**：`Sam3VideoPredictorMultiGPU` 目前不透過建構子參數控制 FA3，而是依賴 GPU 能力偵測（`model_misc.py`）。`.env.ml` 的 `SAM3_ENABLE_FA3=true` 設定需與 build-time 的 `--build-arg ENABLE_FA3=true` 共同使用，確保 `flash-attn-3` 套件已安裝於映像中。
+### FA3 停用時的保護機制（預設行為）
+
+SAM3 的 `sam3/model/model_misc.py::get_sdpa_settings()` 在模組匯入時執行，在 Ampere+ GPU（sm_80+）上會將模組層級變數 `USE_FLASH_ATTN` 設為 `True`。attention 區塊在推論時讀取此旗標，無條件執行：
+
+```python
+from sam3.perflib.fa3 import flash_attn_func   # → from flash_attn_interface import ...
+```
+
+若 `flash-attn-3` 未安裝（預設），`propagate_in_video` 會拋出 `ImportError: No module named 'flash_attn_interface'`，即使 `use_fa3=False` 已傳入 builder 也無法阻止（builder 參數不會覆蓋模組層級旗標）。
+
+**修正**（`ml-backends/sam3-video/model.py::_ensure_loaded()`）：
+
+1. **模組層級 patch**：SAM3 匯入後、`build_sam3_multiplex_video_predictor` 呼叫前，強制覆寫已載入模組物件的旗標：
+   ```python
+   import sam3.model.model_misc as _sam3_misc
+   _sam3_misc.USE_FLASH_ATTN = False
+   ```
+2. **實例層級 patch**：predictor 建置後，掃描所有子模組並清除 `use_fa3` / `use_flash_attn` 屬性（防止 `__init__` 快取舊值）。
+
+預設 `SAM3_ENABLE_FA3=false` 在 Ampere+ GPU 上現已安全，不再需要安裝 `flash-attn-3`。
+
+### 啟用 FA3（選用）
+
+需同時滿足兩個條件：
 
 ```bash
-# 1. 建置時啟用 FA3（安裝 flash-attn-3）
+# 1. 建置時安裝 flash-attn-3
 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml \
   build --build-arg ENABLE_FA3=true sam3-video-backend
 
-# 2. .env.ml 中同時設定
+# or 修改 docker-compose.ml.yml 中 SAM3_ENABLE_FA3: true
+sam3-video-backend:
+    build:
+      context: ./ml-backends/sam3-video
+      dockerfile: Dockerfile
+      args:
+        ENABLE_FA3: true
+
+# 2. .env.ml 中啟用
 SAM3_ENABLE_FA3=true
 
 # 3. 重啟影片後端
 make ml-up
 ```
 
-> Flash Attention 3 目前僅對影片後端有效；影像後端（`build_sam3_image_model()`）不暴露此參數。
+> Flash Attention 3 僅對影片後端有效；影像後端（`build_sam3_image_model()`）不暴露此參數。
+
+## GPU 精度與多 GPU 支援
+
+SAM3 後端自動偵測 GPU 計算能力並選擇最佳推論精度，無需手動配置：
+
+| GPU 世代 | Compute Capability | 推論精度 | 備註 |
+|---------|------------------|--------|------|
+| Ampere（RTX 30xx, A100 等） | sm_80+ | **bfloat16 autocast** + TF32 | 原生 BF16 Tensor Core；TF32 加速剩餘 fp32 運算 |
+| Turing（RTX 20xx, T4 等） | sm_75–79 | **bfloat16 autocast** | 無 BF16 硬體，軟體模擬；**最低支援世代** |
+| Volta（TITAN V, V100 等） | sm_70–72 | **不支援** | SAM3 的 `torch.ops.aten._addmm_activation` bfloat16 kernel 需要 sm_75+；`_check_gpu_compatibility()` 啟動時攔截 |
+| Pascal（GTX 10xx 等） | sm_61 以下 | **不支援** | 同上 |
+
+> **為何全部使用 bfloat16 autocast**：SAM3 的 `sam3/perflib/fused.py::addmm_act` 函數在 MLP fc1 中無條件將所有張量 `.to(torch.bfloat16)` 後再呼叫 fused kernel，fc1 輸出必然為 bf16。若下游的 fc2 weight 仍是 fp32，PyTorch 會拋出 `RuntimeError: mat1 and mat2 must have the same dtype, but got BFloat16 and Float`。`torch.autocast(dtype=bfloat16)` 確保 fc2 執行期自動將 fp32 weight cast 為 bf16，解決不一致。
+
+**多 GPU 支援**（兩個後端均支援）：
+- 透過 `.env.ml` 的 `SAM3_IMAGE_GPU_INDEX` / `SAM3_VIDEO_GPU_INDEX` 獨立指定每個後端的 GPU 編號（逗號分隔可指定多個）
+- `start.sh` 在容器啟動時讀取對應的 `SAM3_*_GPU_INDEX` 並 export 為 `CUDA_VISIBLE_DEVICES`（Docker Compose `${VAR}` 替換只讀 HOST 的 `.env`，無法直接從 `env_file:` 取值，故在 `start.sh` 處理）；gunicorn `post_fork` hook 再依 `worker.age` 做一對一分配：worker *i* → `gpus[i-1]`，每個 worker 內部的 `cuda:0` = 分配到的實體 GPU
+- `SAM3_IMAGE_WORKERS` / `SAM3_VIDEO_WORKERS` 應設為對應 index 中的 GPU 數量，確保 worker 與 GPU 一一對應
+
+**GPU 空閒釋放**：
+- 模型在 `GPU_IDLE_TIMEOUT_SECS` 秒無推論請求後自動從 VRAM 卸載
+- 預設值：3600 秒（1 小時）
+- 調整範例（`.env.ml`）：`GPU_IDLE_TIMEOUT_SECS=1800`（30 分鐘）或 `300`（5 分鐘，更激進）
+
+## 參考資料
+
+**官方儲存庫與模型**：
+- [Meta SAM3 官方源碼](https://github.com/facebookresearch/sam3)
+- [SAM2 後備方案](https://github.com/facebookresearch/sam2)（若 SAM3 不可用）
+- [HuggingFace 模型卡](https://huggingface.co/facebook/sam3.1)
+
+**Label Studio ML 後端範例**：
+- [影像後端範例](https://github.com/HumanSignal/label-studio-ml-backend/tree/master/label_studio_ml/examples/segment_anything_2_image)
+- [影片後端範例](https://github.com/HumanSignal/label-studio-ml-backend/tree/master/label_studio_ml/examples/segment_anything_2_video)
+
+> SAM3/SAM3.1 的完整架構、checkpoint 詳情與進階設定，詳見上述官方儲存庫與 HuggingFace 模型卡。GPU 精度配置會根據硬體自動適應，無需手動干預。
 
 ## 執行測試
 

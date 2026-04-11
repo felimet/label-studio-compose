@@ -9,6 +9,9 @@ Interactive image segmentation using [SAM 3.1](https://github.com/facebookresear
 - **Box prompt**: RectangleLabels — `Object` (positive) or `Exclude` (negative exemplar, `label=False`)
 - **Output**: BrushLabels with Label Studio RLE encoding
 - **Scores display**: inference candidate scores written to `TextArea name="scores"` after each prediction
+- **Automatic GPU precision**: Detects GPU compute capability and uses optimal precision (TF32, bfloat16, or fp32)
+- **Multi-GPU support**: Uses accelerate `device_map="auto"` for automatic GPU dispatch (if available)
+- **GPU idle release**: Automatically unloads model after inactivity timeout (default 1 hour)
 
 ## Prerequisites
 
@@ -49,6 +52,7 @@ Use `labeling_config.xml` as your project's labeling interface.
 | `SAM3_ENABLE_PCS` | `true` | Enable natural-language text prompts (PCS). Set `false` for geometry-only mode |
 | `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | Minimum detection score for text-prompt results (0–1) |
 | `SAM3_RETURN_ALL_MASKS` | `false` | Return all detected instances (`true`) or only the top-scored one (`false`) |
+| `GPU_IDLE_TIMEOUT_SECS` | `3600` | Seconds of inactivity before model is unloaded from VRAM (default: 1 hour). Set lower (e.g., `300`) to release GPU memory more aggressively |
 
 ## Predict Paths
 
@@ -61,6 +65,16 @@ Three paths, all routed through `Sam3Processor` (no SAM2 fallback):
 | Geometry only | Geometric | `add_geometric_prompt()` per prompt; `Object` = `label=True`, `Exclude` = `label=False` |
 
 > **Point prompts**: `Sam3Processor` only accepts boxes, not points. Each KeyPoint is represented as a tiny box (±0.5% of image dims) with `label=True/False` for positive/negative.
+
+## References
+
+- **Official SAM3 Repository**: https://github.com/facebookresearch/sam3
+- **SAM3.1 Model Card (HuggingFace)**: https://huggingface.co/facebook/sam3.1
+- **Label Studio ML Backend Examples**: https://github.com/HumanSignal/label-studio-ml-backend/tree/master/label_studio_ml/examples/segment_anything_2_image
+
+For detailed SAM3/SAM3.1 architecture, checkpoints, and advanced configuration, refer to the official facebookresearch/sam3 repository and HuggingFace model card.
+
+**GPU Hardware Notes**: Precision configuration adapts to your GPU automatically based on compute capability (Ampere sm_80+ uses TF32, Volta sm_70-79 uses bfloat16, Pascal sm_61 uses fp32).
 
 ## Running Tests
 
