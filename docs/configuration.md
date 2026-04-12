@@ -61,6 +61,10 @@ make init-minio
 5. 複製 **Access Key**（對應 LS 的 *Access Key ID*）與 **Secret Key**
 6. 在 LS Cloud Storage 設定頁填入這兩個值
 
+> **⚠️ 重要：首次部署或建立使用者後，務必修改密碼。**
+> 以該使用者身分登入 Admin UI → 右上角頭像 → **Access Keys → Change Password**，將初始密碼換成強隨機密碼並妥善保存。
+> `make init-minio` 自動建立的帳號密碼即 `.env` 的 `MINIO_LS_SECRET_KEY`，建議部署完成後透過此流程輪換，並更新 LS Cloud Storage 設定與 `.env`。
+
 ### MinIO Bucket Access Policy
 
 在 MinIO Admin UI 或 Console 的 Buckets 頁面，每個 bucket 可設定 **Access Policy**：

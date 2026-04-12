@@ -59,6 +59,10 @@ make ml-up
 **專案 → Settings → Cloud Storage → Add Source Storage → S3**
 （endpoint: `http://minio:9000`，使用 `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY`——由 `make init-minio` 建立的最小權限 service account。**請勿**填入 root 帳密）
 
+> **⚠️ 首次部署後：** 立即輪換 service account 密碼。
+> Admin UI（`http://localhost:19002`）→ 右上角頭像 → **Access Keys → Change Password**
+> 同步更新 `.env` 的 `MINIO_LS_SECRET_KEY` 與 LS Cloud Storage 設定。
+
 ## Makefile 指令
 
 | 指令 | 說明 |

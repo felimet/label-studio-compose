@@ -59,6 +59,10 @@ Connect MinIO storage in Label Studio:
 **Project → Settings → Cloud Storage → Add Source Storage → S3**
 (endpoint: `http://minio:9000`, use `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY` — the least-privilege service account created by `make init-minio`. Do **not** use root credentials here).
 
+> **⚠️ After first deployment:** rotate the service account secret immediately.
+> Admin UI (`http://localhost:19002`) → top-right avatar → **Access Keys → Change Password**
+> Update `MINIO_LS_SECRET_KEY` in `.env` and in the LS Cloud Storage settings.
+
 ## Makefile Reference
 
 | Target | Description |

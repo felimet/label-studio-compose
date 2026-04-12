@@ -12,6 +12,10 @@
   Output:
     BrushLabels: SAM3/SAM2 返回的分割遮罩 (RLE 格式)
     scores     : 每次推理後的候選 mask 分數（由 ML backend 自動填入）
+
+  樣式說明：
+    <Style> 內的配色以暗黑模式（dark background）為基準設計。
+    若使用明亮模式，請自行修改 <Style> 內的顏色值（background、color、border 等）。
 -->
 <View>
   <Style>
