@@ -65,6 +65,11 @@ Connect MinIO storage in Label Studio:
 
 ## Makefile Reference
 
+> **`make` required** — Install if missing:
+> - **Windows**: `winget install GnuWin32.Make` then add `C:\Program Files (x86)\GnuWin32\bin` to `PATH` (System Properties → Environment Variables → Path → New)
+> - **macOS**: `brew install make`
+> - **Linux**: `apt install make`
+
 | Target | Description |
 |--------|-------------|
 | `up / down / restart / logs / ps` | Core stack lifecycle |

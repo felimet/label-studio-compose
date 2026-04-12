@@ -65,6 +65,11 @@ make ml-up
 
 ## Makefile 指令
 
+> **需先安裝 `make`** — 安裝方式：
+> - **Windows**：`winget install GnuWin32.Make`，完成後將 `C:\Program Files (x86)\GnuWin32\bin` 加入 `PATH`（系統內容 → 進階 → 環境變數 → Path → 新增）
+> - **macOS**：`brew install make`
+> - **Linux**：`apt install make`
+
 | 指令 | 說明 |
 |------|------|
 | `up / down / restart / logs / ps` | 核心服務生命週期管理 |
