@@ -1,0 +1,131 @@
+<!--
+  SAM2.1 Video Tracking — Label Studio Labeling Config
+  =====================================================
+  模型選擇（Choices checkbox）：
+    選擇要使用的 SAM2.1 模型變體。預設為 large。
+    除非重新更改 checkbox，否則系統一律使用最後一次選擇的模型。
+
+  推理觸發流程：
+    1. 在影片某一畫格上繪製 VideoRectangle（選 Object 或 Exclude 標籤），放開即觸發追蹤
+       或 點擊 KeyPoint（Object / Exclude）加入正向 / 負向點提示
+    2. SAM2.1 向前追蹤
+    3. 結果以 VideoRectangle sequence 形式回傳
+
+  注意：SAM2.1 不支援文字提示，已移除 TextArea text_prompt。
+
+  Output:
+    VideoRectangle: 追蹤物件的逐畫格邊界框序列
+    scores        : 推理資訊（由 ML backend 自動填入）
+
+  樣式說明：
+    <Style> 配色以暗黑模式為基準。
+-->
+<View>
+  <Style>
+    .sam21-section {
+      background: #2a2a2a;
+      border: 1px solid #3d3d3d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    }
+    .sam21-label span {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px dashed #555;
+      cursor: help;
+      position: relative;
+    }
+    .sam21-label span[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      left: 0;
+      top: calc(100% + 4px);
+      background: #1e1e1e;
+      color: #ccc;
+      padding: 8px 10px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      font-size: 11px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: pre-line;
+      text-align: left;
+      width: 280px;
+      z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    .sam21-scores textarea {
+      font-family: monospace;
+      font-size: 11px;
+      color: #aaa;
+      background: #1a1a1a;
+    }
+    .lsf-main-content.lsf-requesting .sam21-hint span::after {
+      content: " ⏳ Running SAM2.1…";
+      color: #666;
+      font-size: 11px;
+      font-style: italic;
+      text-transform: none;
+      border-bottom: none;
+    }
+  </Style>
+
+  <Video name="video" value="$video" framerate="25.0"/>
+
+  <!-- VideoRectangle: draw on a frame to trigger tracking -->
+  <View className="sam21-section">
+    <HyperText name="h_box" value="" className="sam21-label" inline="true">
+      <span title="1. 在影片上暫停至目標畫格。&#10;2. 選標籤後拖拉矩形框住目標，放開即觸發追蹤。&#10;&#10;Object  → 正向框（追蹤目標物件）&#10;Exclude → 負向框（告知模型排除此區域）">Box Prompt</span>
+    </HyperText>
+    <VideoRectangle name="box" toName="video" smart="true"/>
+  </View>
+
+  <!-- KeyPoint: click on a frame to add foreground/background point prompts -->
+  <View className="sam21-section">
+    <HyperText name="h_kp" value="" className="sam21-label" inline="true">
+      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 在影片目標畫格上點擊位置。&#10;&#10;Object  → 正向點（標記目標）&#10;Exclude → 負向點（標記排除區域）">Keypoint Prompt</span>
+    </HyperText>
+    <KeyPointLabels name="kp" toName="video" smart="true">
+      <Label value="Object"  smart="true" background="#250dd3" showInline="true"/>
+      <Label value="Exclude" smart="true" background="#555555" showInline="true"/>
+    </KeyPointLabels>
+  </View>
+
+  <!-- Labels for tracking objects -->
+  <Labels name="videoLabels" toName="video" allowEmpty="true">
+    <Label value="Object"  background="#11A39E"/>
+    <Label value="Exclude" background="#FF4D4F"/>
+  </Labels>
+
+  <!-- Model selection — persisted, default base_plus -->
+  <View className="sam21-section">
+    <HyperText name="h_model" value="" className="sam21-label sam21-hint" inline="true">
+      <span title="選擇 SAM2.1 模型變體。&#10;選擇後系統會記住此設定，下次推理自動沿用，直到再次更改。&#10;&#10;Tiny  (~38M params)  — 最快&#10;Small (~46M params)  — 快&#10;Base+ (~80M params)  — 預設&#10;Large (~224M params) — 最精準">Model</span>
+    </HyperText>
+    <Choices name="sam_model" toName="video"
+             choice="single" showInline="true" required="false">
+      <Choice value="sam2.1_hiera_tiny"      alias="Tiny   (~38M)"/>
+      <Choice value="sam2.1_hiera_small"     alias="Small  (~46M)"/>
+      <Choice value="sam2.1_hiera_base_plus" alias="Base+  (~80M)"/>
+      <Choice value="sam2.1_hiera_large"     alias="Large  (~224M)" selected="true"/>
+    </Choices>
+  </View>
+
+  <!-- Inference info: filled by ML backend after each prediction -->
+  <View className="sam21-section sam21-scores">
+    <HyperText name="h_scores" value="" className="sam21-label" inline="true">
+      <span title="推理後由 ML backend 自動填入的追蹤資訊。">Tracking Info</span>
+    </HyperText>
+    <TextArea name="scores" toName="video"
+              placeholder="Tracking info appears here after prediction…"
+              perRegion="false" rows="3"
+              maxSubmissions="1" showSubmitButton="false" editable="false"/>
+  </View>
+
+</View>

@@ -1,0 +1,15 @@
+# PyTorch: installed via pytorch/pytorch base image in Dockerfile.
+# SAM2: installed via `pip install -e /sam2_src` in Dockerfile.
+# label-studio-ml: in requirements-base.txt (git install).
+
+huggingface_hub>=0.27.0
+Pillow>=10.3.0
+numpy>=1.26.0,<2.0.0
+label-studio-sdk>=1.0.0
+label-studio-converter>=0.0.57
+requests>=2.32.0
+# SAM2 runtime dependencies
+einops>=0.8.0
+torchvision>=0.22.0
+# Video frame extraction (opencv 4.11+ requires numpy>=2; pin to 4.10.x)
+opencv-python>=4.9.0,<4.11

@@ -16,6 +16,8 @@ Individual service health endpoints:
 | nginx | `http://localhost:18090/health` *(dev port)* | `OK` |
 | sam3-image-backend | `http://sam3-image-backend:9090/health` *(internal)* | HTTP 200 |
 | sam3-video-backend | `http://sam3-video-backend:9090/health` *(internal)* | HTTP 200 |
+| sam21-image-backend | `http://sam21-image-backend:9090/health` *(internal)* | HTTP 200 |
+| sam21-video-backend | `http://sam21-video-backend:9090/health` *(internal)* | HTTP 200 |
 | MinIO | `mc ready local` *(via docker exec)* | `The cluster is ready` |
 
 ## Deployment
@@ -57,16 +59,33 @@ make health
 ### Start ML backends (GPU)
 
 ```bash
-make ml-up             # core stack + sam3-image-backend + sam3-video-backend
-make health            # includes SAM3 checks
+make ml-up             # core stack + all ML backends (SAM3 + SAM2.1)
+make health
+
+# Single backend (assumes label-studio already running):
+make up-sam3-image     make up-sam3-video
+make up-sam21-image    make up-sam21-video
+
+# Restart individual backend:
+make restart-sam3-image    make restart-sam3-video
+make restart-sam21-image   make restart-sam21-video
 ```
 
 After startup, register each backend in Label Studio:
 
+**SAM3**
 1. **Project → Settings → Machine Learning → Add Model**
 2. Image backend URL: `http://sam3-image-backend:9090`
 3. Video backend URL: `http://sam3-video-backend:9090`
 4. Click **Validate and Save**, enable **Auto-Annotation**
+
+**SAM2.1**
+1. **Project → Settings → Machine Learning → Add Model**
+2. Image backend URL: `http://sam21-image-backend:9090`
+3. Video backend URL: `http://sam21-video-backend:9090`
+4. Click **Validate and Save**, enable **Auto-Annotation**
+
+> SAM2.1 checkpoints (~10 GB total for all 4 variants) are downloaded at **build time** into the `model-cache` Docker volume. No network access required at runtime.
 
 ## Rollback
 
@@ -409,9 +428,13 @@ make logs                                     # all services, last 100 lines
 docker compose logs -f label-studio           # LS only
 docker compose logs -f db redis               # infra only
 
-# ML backends
+# SAM3 backends
 docker compose -f docker-compose.yml -f docker-compose.ml.yml \
   logs -f sam3-image-backend sam3-video-backend
+
+# SAM2.1 backends
+docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+  logs -f sam21-image-backend sam21-video-backend
 ```
 
 Structured JSON logs are enabled (`JSON_LOG=1`). Use `jq` to filter:
@@ -441,7 +464,8 @@ tar -czf minio-data-$(date +%Y%m%d).tar.gz ./minio-data/
 ### Exclude from backup
 
 - `redis-data/` — 任務佇列暫存，重啟後自動恢復，不需備份
-- `hf-cache`, `sam3-image-models`, `sam3-video-models` — 可從 HuggingFace 重新下載
+- `hf-cache` (SAM3 HuggingFace 快取) — 可透過 `make ml-up` 重新下載
+- `model-cache` (SAM2.1 checkpoints) — 可透過 `make build-sam21-image` 重新下載（build time 下載）
 
 ## Monitoring
 

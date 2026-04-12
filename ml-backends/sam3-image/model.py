@@ -593,7 +593,7 @@ class NewModel(LabelStudioMLBase):
         for rank, idx in enumerate(indices):
             mask_np = masks_tensor[idx, 0].cpu().numpy().astype(np.uint8)
             score   = float(scores_tensor[idx]) if scores_tensor is not None else 1.0
-            rle     = brush.mask2rle(mask_np * 255)
+            rle     = brush.mask2rle(mask_np * 255) 
             results.append({
                 "id":             str(uuid4())[:4],
                 "from_name":      from_name,

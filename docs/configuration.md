@@ -224,9 +224,58 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 ### 說明
 
-- 兩個後端共用 `hf-cache` Volume（掛載至 `/home/appuser/.cache/huggingface`，對應 Dockerfile 的 `HF_HOME`）。Checkpoint 直接儲存在 HF cache 內，不需額外的 models volume。
-- `hf_hub_download` 會將實際 blob 存入 HF cache，回傳 blob 路徑供模型載入；不再 copy 到 `/data/models`。
+- SAM3 兩個後端共用 `hf-cache` Volume（`/home/appuser/.cache/huggingface`）。Checkpoint 在**首次推論時**透過 `hf_hub_download` 下載至 HF cache，回傳 blob 路徑供模型載入。
 - 首次啟動：影像後端下載 ~3.45 GB，影片後端下載 ~3.5 GB；健康檢查設 `start_period: 300s` 留足緩衝。
+
+## SAM2.1 ML 後端
+
+<!-- AUTO-GENERATED from .env.ml.example + docker-compose.ml.yml -->
+**Last Updated:** 2026-04-13
+
+> 所有 SAM2.1 變數定義於 `.env.ml`（從 `.env.ml.example` 複製後填入）。
+> Checkpoint 在 **build time** 下載至 `model-cache` Volume（`/data/models`），runtime 直接讀取，不需網路。
+
+### 模型選擇
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `SAM21_DEFAULT_MODEL` | `sam2.1_hiera_large` | 後端啟動時的預設模型。可在標注介面的 Choices checkbox 切換；切換後系統記憶最後一次選擇。可選值：`sam2.1_hiera_tiny` / `sam2.1_hiera_small` / `sam2.1_hiera_base_plus` / `sam2.1_hiera_large` |
+
+可選 checkpoint 規格：
+
+| 模型 key | 參數量 | Checkpoint 大小 |
+|----------|--------|----------------|
+| `sam2.1_hiera_tiny` | ~38M | ~155 MB |
+| `sam2.1_hiera_small` | ~46M | ~185 MB |
+| `sam2.1_hiera_base_plus` | ~80M | ~325 MB |
+| `sam2.1_hiera_large` | ~224M | ~900 MB |
+
+> SAM2.1 repos 為公開存取，不需接受 Meta 授權即可下載。提供 `HF_TOKEN` 可提升 HuggingFace 速率限制。Build time 執行 `download_models.py`（primary）或 `download_ckpts.sh`（fallback，Meta CDN）。
+
+### GPU 指定
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `SAM21_IMAGE_GPU_INDEX` | `（空）` | 影像後端 GPU 編號（`nvidia-smi` index）。多 GPU 逗號分隔；留空 = 暴露所有 GPU |
+| `SAM21_VIDEO_GPU_INDEX` | `（空）` | 影片後端 GPU 編號。留空 = 暴露所有 GPU |
+
+### Gunicorn 並發設定
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `SAM21_IMAGE_WORKERS` | `1` | 影像後端 gunicorn worker 數。設為 `SAM21_IMAGE_GPU_INDEX` 的 GPU 數量 |
+| `SAM21_VIDEO_WORKERS` | `1` | 影片後端 gunicorn worker 數。設為 `SAM21_VIDEO_GPU_INDEX` 的 GPU 數量 |
+
+> `DEVICE`、`THREADS`、`GPU_IDLE_TIMEOUT_SECS`、`LOG_LEVEL`、`BASIC_AUTH_USER`、`BASIC_AUTH_PASS` 由 SAM3 與 SAM2.1 共用，定義見上方 SAM3 節。
+
+### Volume 說明
+
+| Volume | 掛載路徑 | 服務 | 說明 |
+|--------|---------|------|------|
+| `hf-cache` | `/home/appuser/.cache/huggingface` | sam3-image, sam3-video | SAM3 runtime 下載快取 |
+| `model-cache` | `/data/models` | sam21-image, sam21-video | SAM2.1 build-time 下載的 `.pt` 檔案（image 與 video 共用） |
+
+<!-- END AUTO-GENERATED -->
 
 ## 產生強密碼
 

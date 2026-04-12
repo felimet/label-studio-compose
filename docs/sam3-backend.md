@@ -37,6 +37,12 @@ make ml-down            # 停止所有服務（含核心）
 make build-sam3-image   # 僅建置影像後端映像
 make build-sam3-video   # 僅建置影片後端映像
 
+make up-sam3-image      # 單獨啟動影像後端（假設 label-studio 已運行，--no-deps）
+make up-sam3-video      # 單獨啟動影片後端
+
+make restart-sam3-image # 重啟影像後端
+make restart-sam3-video # 重啟影片後端
+
 make test-sam3-image    # 在容器內執行影像後端 pytest
 make test-sam3-video    # 在容器內執行影片後端 pytest
 ```

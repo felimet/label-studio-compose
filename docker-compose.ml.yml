@@ -1,5 +1,5 @@
 # ============================================================
-# ML Backends Overlay — SAM3 Image + Video
+# ML Backends Overlay — SAM3 Image + Video + SAM2.1 Image + Video
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d
 #
@@ -98,5 +98,82 @@ services:
     networks:
       - internal
 
+  # ── SAM2.1 Image Backend ────────────────────────────────────
+  sam21-image-backend:
+    build:
+      context: ./ml-backends/sam21-image
+      dockerfile: Dockerfile
+      args:
+        SAM2_COMMIT: main
+        # Pass HF_TOKEN at build time to download checkpoints:
+        #   docker compose build --build-arg HF_TOKEN=<token> sam21-image-backend
+        # Or set HF_TOKEN in .env.ml (will be read by download_models.py)
+    restart: unless-stopped
+    env_file:
+      - .env.ml
+    environment:
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - PORT=9090
+    volumes:
+      - model-cache:/data/models
+      - ./ml-backends/sam21-image/model.py:/app/model.py:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 300s
+      retries: 5
+    depends_on:
+      label-studio:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── SAM2.1 Video Backend ─────────────────────────────────────
+  sam21-video-backend:
+    build:
+      context: ./ml-backends/sam21-video
+      dockerfile: Dockerfile
+      args:
+        SAM2_COMMIT: main
+    restart: unless-stopped
+    env_file:
+      - .env.ml
+    environment:
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - PORT=9090
+    volumes:
+      - model-cache:/data/models
+      - ./ml-backends/sam21-video/model.py:/app/model.py:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 300s
+      retries: 5
+    depends_on:
+      label-studio:
+        condition: service_healthy
+    networks:
+      - internal
+
 volumes:
   hf-cache:
+  # Shared checkpoint volume for SAM2.1 image + video backends.
+  # Checkpoints are downloaded during `docker compose build` (download_models.py).
+  # Both services mount this volume read-write; at runtime they only read .pt files.
+  model-cache:
