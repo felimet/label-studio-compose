@@ -38,13 +38,16 @@ Predictor selection (auto-detected at startup via import availability)
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import os
-
 import tempfile
 import threading
 import gc as _gc
 import time as _time_module
+
+import requests
 
 
 from typing import List, Dict, Optional
@@ -71,11 +74,34 @@ def _to_internal_url(url: str) -> str:
     if not ls_internal or not url:
         return url
     parsed = urlparse(url)
+    # Only rewrite http/https LS URLs — s3://, gs://, etc. must pass through unchanged
+    if parsed.scheme not in ("http", "https"):
+        return url
     internal = urlparse(ls_internal)
-    # Only rewrite Label Studio paths — don't touch S3/MinIO/external URLs
     if parsed.path.startswith(("/data/", "/api/", "/tasks/")):
         return urlunparse(parsed._replace(scheme=internal.scheme, netloc=internal.netloc))
     return url
+
+
+def _download_ls_url(url: str) -> str:
+    """Download from a Label Studio internal URL directly with API token auth.
+
+    Bypasses SDK get_local_path which mishandles resolve URLs: it decodes the
+    S3 fileuri parameter and constructs an incorrect /data/<key> local path,
+    causing 404 for S3-backed cloud storage in proxy mode.
+    """
+    api_key = os.getenv("LABEL_STUDIO_API_KEY", "")
+    headers = {"Authorization": f"Token {api_key}"} if api_key else {}
+    r = requests.get(url, headers=headers, timeout=60)
+    r.raise_for_status()
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    cache_dir = os.path.join(tempfile.gettempdir(), "ls-ml-img-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    filepath = os.path.join(cache_dir, f"{url_hash}.cache")
+    if not os.path.exists(filepath):
+        with open(filepath, "wb") as _f:
+            _f.write(r.content)
+    return filepath
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -406,9 +432,21 @@ class NewModel(LabelStudioMLBase):
 
 
         # ── Resolve video path ─────────────────────────────────────────────────
-        video_url = _to_internal_url(task["data"][value])
+        _raw_video_url = task["data"][value]
+        video_url = _to_internal_url(_raw_video_url)
         try:
-            video_path = self.get_local_path(video_url, task_id=task_id)
+            _ls_base = os.getenv("LABEL_STUDIO_URL", "http://label-studio:8080").rstrip("/")
+            if _raw_video_url.startswith("s3://"):
+                # Task data stores a bare s3:// URI (Cloud Storage import).
+                # Convert to LS resolve URL so proxy mode serves the video.
+                _fileuri  = base64.b64encode(_raw_video_url.encode()).decode()
+                video_url = f"{_ls_base}/tasks/{task_id}/resolve/?fileuri={_fileuri}"
+                logger.debug("S3 URL → resolve: %r", video_url)
+                video_path = _download_ls_url(video_url)
+            elif video_url.startswith("http://label-studio:") or video_url.startswith(_ls_base):
+                video_path = _download_ls_url(video_url)
+            else:
+                video_path = self.get_local_path(video_url, task_id=task_id)
         except Exception as exc:
             logger.error("Failed to resolve video path: %s", exc)
             return ModelResponse(predictions=[])

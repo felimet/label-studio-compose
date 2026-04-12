@@ -27,11 +27,16 @@ Three predict paths (all via Sam3Processor)
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import os
+import tempfile
 import threading
 import gc as _gc
 import time as _time_module
+
+import requests
 
 try:
     from accelerate import dispatch_model, infer_auto_device_map  # type: ignore[import]
@@ -64,11 +69,34 @@ def _to_internal_url(url: str) -> str:
     if not ls_internal or not url:
         return url
     parsed = urlparse(url)
+    # Only rewrite http/https LS URLs — s3://, gs://, etc. must pass through unchanged
+    if parsed.scheme not in ("http", "https"):
+        return url
     internal = urlparse(ls_internal)
-    # Only rewrite Label Studio paths — don't touch S3/MinIO/external URLs
     if parsed.path.startswith(("/data/", "/api/", "/tasks/")):
         return urlunparse(parsed._replace(scheme=internal.scheme, netloc=internal.netloc))
     return url
+
+
+def _download_ls_url(url: str) -> str:
+    """Download from a Label Studio internal URL directly with API token auth.
+
+    Bypasses SDK get_local_path which mishandles resolve URLs: it decodes the
+    S3 fileuri parameter and constructs an incorrect /data/<key> local path,
+    causing 404 for S3-backed cloud storage in proxy mode.
+    """
+    api_key = os.getenv("LABEL_STUDIO_API_KEY", "")
+    headers = {"Authorization": f"Token {api_key}"} if api_key else {}
+    r = requests.get(url, headers=headers, timeout=60)
+    r.raise_for_status()
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    cache_dir = os.path.join(tempfile.gettempdir(), "ls-ml-img-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    filepath = os.path.join(cache_dir, f"{url_hash}.cache")
+    if not os.path.exists(filepath):
+        with open(filepath, "wb") as _f:
+            _f.write(r.content)
+    return filepath
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -402,8 +430,25 @@ class NewModel(LabelStudioMLBase):
             selected_label = brush_labels[0] if brush_labels else "Object"
 
         # ── Load image ─────────────────────────────────────────────────────────
-        img_url  = _to_internal_url(tasks[0]["data"][value])
-        img_path = self.get_local_path(img_url, task_id=tasks[0].get("id"))
+        _raw_url = tasks[0]["data"][value]
+        logger.debug("Raw image URL from task data: %r", _raw_url)
+        img_url  = _to_internal_url(_raw_url)
+        logger.debug("After _to_internal_url: %r", img_url)
+        _ls_base = os.getenv("LABEL_STUDIO_URL", "http://label-studio:8080").rstrip("/")
+        if _raw_url.startswith("s3://"):
+            # Task data stores a bare s3:// URI (Cloud Storage import).
+            # _to_internal_url intentionally leaves this unchanged now.
+            # Convert to LS resolve URL so proxy mode serves the image.
+            _fileuri  = base64.b64encode(_raw_url.encode()).decode()
+            _task_id  = tasks[0].get("id")
+            img_url   = f"{_ls_base}/tasks/{_task_id}/resolve/?fileuri={_fileuri}"
+            logger.debug("S3 URL → resolve: %r", img_url)
+            img_path = _download_ls_url(img_url)
+        elif img_url.startswith("http://label-studio:") or img_url.startswith(_ls_base):
+            # LS internal URL (resolve or local upload) — download with API auth
+            img_path = _download_ls_url(img_url)
+        else:
+            img_path = self.get_local_path(img_url, task_id=tasks[0].get("id"))
         try:
             pil_img = Image.open(img_path).convert("RGB")
         except Exception:
