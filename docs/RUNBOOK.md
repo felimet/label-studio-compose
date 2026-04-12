@@ -258,6 +258,72 @@ If OOM still occurs after these settings:
 3. Use `DEVICE=cpu` in `.env.ml` (very slow, no GPU required)
 4. Try a smaller model: set `SAM3_MODEL_ID=facebook/sam3` and `SAM3_CHECKPOINT_FILENAME=sam3.pt` in `.env.ml`
 
+### S3 Cloud Storage — 圖片無法在 LS UI 載入（"There was an issue loading URL"）
+
+**症狀**：LS UI 標注介面顯示 `There was an issue loading URL from $image value`，URL 格式為：
+```
+https://<ls-host>/tasks/<id>/resolve/?fileuri=<base64-s3-uri>
+```
+
+**根因排查（依序）**：
+
+1. **Service account 無此 bucket 存取權**（最常見）
+
+   `minio-init` 建立的 IAM policy 只綁定 `MINIO_BUCKET` 所列的 bucket。若在 MinIO Admin UI 手動建立新 bucket 再設為 LS Cloud Storage，service account 沒有該 bucket 的權限，presigned URL 無法產生。
+
+   **修法**：在 `.env` 的 `MINIO_BUCKET` 追加新 bucket 名稱（逗號分隔），重跑 init：
+   ```bash
+   # .env
+   MINIO_BUCKET=default-bucket,test
+
+   docker compose run --rm minio-init
+   ```
+   或在 MinIO Admin UI → Policies → `ls-bucket-policy` → Edit，手動加入新 bucket 的 ARN。
+
+2. **Use pre-signed URLs 開啟，但 MinIO 外部 URL 不可達**
+
+   Presigned URL mode 要求瀏覽器能直接連到 `MINIO_EXTERNAL_HOST`（MinIO S3 API 公開網域）。若 Cloudflare Tunnel 未設此路由，或 `MINIO_EXTERNAL_HOST` 未正確設定，瀏覽器會拿到無法解析的 URL。
+
+   **推薦修法（Cloudflare Tunnel 架構）**：在 LS Cloud Storage 設定關閉 **「Use pre-signed URLs」**，切到 **Proxy Mode**：
+   - MinIO 完全不需對外曝露
+   - LS backend 自行從 MinIO 取檔後串流給瀏覽器
+   - 消除 CORS 問題
+   - 代價：LS container 需承擔額外的 streaming 負載（實驗室規模可接受）
+
+3. **S3 Endpoint 填錯**
+
+   LS Cloud Storage 的 S3 Endpoint 應填 **容器內部位址** `http://minio:9000`，不要填 Cloudflare Tunnel 外部 URL（`https://minio-*.example.com`）。
+
+   | 欄位 | 正確值 |
+   |---|---|
+   | S3 Endpoint | `http://minio:9000` |
+   | Bucket Name | MinIO 中實際存在的 bucket 名稱 |
+   | Access Key ID | `MINIO_LS_ACCESS_ID` |
+   | Secret Access Key | `MINIO_LS_SECRET_KEY` |
+
+---
+
+### ML backend — S3 圖片下載 404（`_to_internal_url` 誤判裸 S3 URL）
+
+**症狀**：
+```
+requests.exceptions.HTTPError: 404 Client Error: Not Found for url: http://label-studio:8080/data/<s3-key>
+```
+
+**根因（雙層疊加）**：
+
+1. LS Cloud Storage import 後，task data 的 image 欄位儲存的是**裸 S3 URI**，例如 `s3://test/data/sample.png`。
+2. `_to_internal_url()` 用 `parsed.path.startswith("/data/")` 判斷是否為 LS 路徑，但 `s3://test/data/sample.png` 解析後 `path = /data/sample.png` 也符合此條件，導致函式錯誤地把 scheme `s3://` + netloc `test` 替換為 `http://label-studio:8080`，輸出 `http://label-studio:8080/data/sample.png`（不存在的路徑）→ 404。
+
+**修復**：
+
+- `_to_internal_url()`：加 `parsed.scheme not in ("http", "https")` 守衛，非 HTTP URL 原封不動回傳。
+- `predict()`：偵測 `_raw_url.startswith("s3://")` → 自行組 LS resolve URL（`base64` 編碼 S3 URI）→ 透過 `_download_ls_url()` 以 API token 下載，繞過 SDK。
+
+此問題僅在 **Proxy Mode（Use pre-signed URLs OFF）** 下出現；Presigned URL mode 下，task image 欄位儲存的是 MinIO 直接連結，不含裸 S3 URI。
+
+---
+
 ### Cloud Storage 概念速查
 
 **Source Cloud Storage**（來源儲存）：存放「原始資料」或「任務定義」。

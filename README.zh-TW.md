@@ -81,7 +81,7 @@ make ml-up
 | 文件 | 內容 |
 |------|------|
 | [docs/configuration.md](docs/configuration.md) | `.env` 環境變數說明 · [MinIO 存取政策](docs/configuration.md#minio-bucket-access-policy) · [Bucket 加密](docs/configuration.md#bucket-encryptionsse-s3--sse-kms) · [pg-db vs ls-data](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) |
-| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust 設定 + WAF 規則 + 替代方案 |
+| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust 設定 + WAF 規則 + 快速部署替代方案 ngrok  |
 | [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 模型設定 + 標注流程 |
 | [docs/architecture.md](docs/architecture.md) | 服務拓撲、Volume、網路 |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | 營運指南（健康檢查、升級、排除故障） |

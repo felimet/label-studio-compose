@@ -26,9 +26,9 @@
 |------|------|------|
 | `MINIO_ROOT_USER` | — | 管理員帳號（僅用於 minio-init 初始化及 Admin UI） |
 | `MINIO_ROOT_PASSWORD` | — | 管理員密碼（≥8 字元） |
-| `MINIO_BUCKET` | `default-bucket` | 儲存桶名稱；由 `make init-minio` 自動建立 |
+| `MINIO_BUCKET` | `default-bucket` | 儲存桶名稱（逗號分隔可列多個，例如 `default-bucket,test`）；所列 bucket 均由 `make init-minio` 自動建立，service account 亦同時取得所有 bucket 的存取權 |
 | `MINIO_EXTERNAL_HOST` | `minio.example.com` | 對外公開網域；嵌入 Presigned URL |
-| `MINIO_LS_ACCESS_ID` | `openssl rand -hex 10` | Label Studio 專用 access key（最小權限，僅限 `MINIO_BUCKET`）。由 `minio-init` 建立；**設定 LS Cloud Storage 時使用此帳號，不要用 root** |
+| `MINIO_LS_ACCESS_ID` | `openssl rand -hex 10` | Label Studio 專用 access key（最小權限，限 `MINIO_BUCKET` 所列的所有 bucket）。由 `minio-init` 建立；**設定 LS Cloud Storage 時使用此帳號，不要用 root** |
 | `MINIO_LS_SECRET_KEY` | `openssl rand -hex 20` | 對應 secret key（≥8 字元） |
 | `MINIO_BUCKET_QUOTA_GB` | `200` | Bucket 容量上限（GiB）。**留空停用** |
 

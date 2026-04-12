@@ -81,7 +81,7 @@ Connect MinIO storage in Label Studio:
 | Guide | Contents |
 |-------|----------|
 | [docs/configuration.md](docs/configuration.md) | `.env` variable reference · [MinIO Access Policy](docs/configuration.md#minio-bucket-access-policy) · [Bucket Encryption](docs/configuration.md#bucket-encryptionsse-s3--sse-kms) · [pg-db vs ls-data](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) |
-| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust setup + WAF rules + alternatives |
+| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust setup + WAF rules + alternatives (ngrok) |
 | [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 model setup + annotation workflow |
 | [docs/architecture.md](docs/architecture.md) | Service topology, volumes, networking |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operations guide (health checks, upgrades, troubleshooting) |
