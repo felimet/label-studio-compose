@@ -6,7 +6,7 @@ VideoRectangle tracking + optional text (PCS) prompts using [SAM 3.1](https://gi
 
 - **Text-only path**: TextArea prompt without a box → `add_prompt` at frame 0 with text only; SAM3 detects and tracks all matching instances forward.
 - **Text + Box (mixed)**: text passed alongside VideoRectangle geometry for precise grounding.
-- **Exclude box**: `Labels value="Exclude"` on a VideoRectangle → `bounding_box_labels=[0]` (negative prompt).
+- **Dynamic label mapping**: non-`Exclude` labels map to positive prompts (`bounding_box_labels=[1]`); `Exclude` maps to negative prompts (`bounding_box_labels=[0]`).
 - **Scores display**: `add_prompt` responses written to `TextArea name="scores"` after each prediction.
 - **SAM2 fallback**: if `sam3` package is unavailable, falls back to SAM2 video predictor; text prompts are ignored with a WARNING in that mode.
 - **Automatic GPU precision**: Detects GPU compute capability and uses optimal precision (TF32, bfloat16, or fp32)
@@ -18,7 +18,7 @@ VideoRectangle tracking + optional text (PCS) prompts using [SAM 3.1](https://gi
 1. Set `.env.ml`: `LABEL_STUDIO_API_KEY`, `HF_TOKEN`
 2. `docker compose -f ../../docker-compose.yml -f ../../docker-compose.ml.yml up -d sam3-video-backend`
 3. Label Studio: Add Model URL `http://sam3-video-backend:9090`
-4. Use `labeling_config.xml` as project interface (includes `<TextArea>` for text prompts, `Exclude` label, scores area)
+4. Use `labeling_config.xml` as project interface (supports custom labels; `Exclude` remains the negative prompt label)
 
 ## Key Variables
 
@@ -38,7 +38,7 @@ VideoRectangle tracking + optional text (PCS) prompts using [SAM 3.1](https://gi
 | Input | Path | Notes |
 |-------|------|-------|
 | TextArea only | Text-only PCS | `add_prompt` at frame 0 with `text` only; no box required. Video metadata probed from file via `cv2`. |
-| VideoRectangle (Object) | Geometric | `bounding_box_labels=[1]` per prompted frame |
+| VideoRectangle (non-`Exclude`) | Geometric | `bounding_box_labels=[1]` per prompted frame |
 | VideoRectangle (Exclude) | Negative geometric | `bounding_box_labels=[0]`; tells SAM3 to exclude the region |
 | TextArea + VideoRectangle | Mixed | `text` + `bounding_boxes` in same `add_prompt` call |
 

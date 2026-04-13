@@ -427,6 +427,12 @@ class NewModel(LabelStudioMLBase):
         # Default to the first BrushLabels label so the mask gets a visible colour.
         if selected_label is None:
             brush_labels = self.parsed_label_config.get(from_name, {}).get("labels", [])
+            if not brush_labels:
+                for cfg in self.parsed_label_config.values():
+                    cfg_labels = cfg.get("labels", [])
+                    if cfg_labels:
+                        brush_labels = cfg_labels
+                        break
             selected_label = brush_labels[0] if brush_labels else "Object"
 
         # ── Load image ─────────────────────────────────────────────────────────

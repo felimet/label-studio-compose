@@ -388,6 +388,19 @@ class NewModel(LabelStudioMLBase):
     def setup(self) -> None:
         self.set("model_version", f"sam3-video:{MODEL_ID.split('/')[-1]}")
 
+    def _resolve_default_track_label(self, from_name: str) -> str:
+        """Resolve a default tracking label from Label Studio config."""
+        labels = self.parsed_label_config.get(from_name, {}).get("labels", [])
+        if labels:
+            return str(labels[0])
+
+        for cfg in self.parsed_label_config.values():
+            cfg_labels = cfg.get("labels", [])
+            if cfg_labels:
+                return str(cfg_labels[0])
+
+        return "Object"
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def predict(
@@ -424,7 +437,8 @@ class NewModel(LabelStudioMLBase):
             fps          = _fc / _dur if _dur else 25.0
 
         # ── Parse prompts ──────────────────────────────────────────────────────
-        geo_prompts = self._get_geo_prompts(context)
+        default_track_label = self._resolve_default_track_label(from_name)
+        geo_prompts = self._get_geo_prompts(context, default_track_label)
         text_prompt = self._get_text_prompt(context)
 
         if not geo_prompts and not text_prompt:
@@ -747,13 +761,16 @@ class NewModel(LabelStudioMLBase):
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    def _get_geo_prompts(self, context: dict) -> list[dict]:
+    def _get_geo_prompts(self, context: dict, default_label: Optional[str] = None) -> list[dict]:
         """Parse VideoRectangle and KeyPointLabels items into prompt dicts.
 
         Returns a list of dicts with ``type`` = "box" or "point".
         Box fields  : obj_id, frame_idx, x_pct, y_pct, w_pct, h_pct, is_positive
         Point fields: obj_id, frame_idx, x_pct, y_pct, is_positive, label_name
         """
+        if not default_label:
+            default_label = self._resolve_default_track_label("")
+
         prompts: list[dict] = []
         for item in context.get("result", []):
             item_type = item.get("type")
@@ -762,7 +779,7 @@ class NewModel(LabelStudioMLBase):
                 obj_id = item["id"]
                 # Label applied to the whole tracking object (not per-frame sequence).
                 # "Exclude" → negative prompt (bounding_box_labels=0).
-                label_name  = (item["value"].get("labels") or ["Object"])[0]
+                label_name  = (item["value"].get("labels") or [default_label])[0]
                 is_positive = label_name.lower() != "exclude"
                 for seq in item["value"].get("sequence", []):
                     if not seq.get("enabled", True):
@@ -784,7 +801,7 @@ class NewModel(LabelStudioMLBase):
                 val        = item["value"]
                 # LS sends frame as 1-indexed for video controls; default to frame 1
                 frame_idx  = max(val.get("frame", 1) - 1, 0)
-                label_name = (val.get("keypointlabels") or ["Object"])[0]
+                label_name = (val.get("keypointlabels") or [default_label])[0]
                 is_positive = int(
                     item.get("is_positive", 0 if label_name.lower() == "background" else 1)
                 )

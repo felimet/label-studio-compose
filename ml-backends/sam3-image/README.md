@@ -6,8 +6,8 @@ Interactive image segmentation using [SAM 3.1](https://github.com/facebookresear
 
 - **Text prompt** (SAM3 open-vocabulary PCS): label name → full-image detection of all matching instances
 - **Point prompt**: KeyPointLabels (positive / negative clicks)
-- **Box prompt**: RectangleLabels — `Object` (positive) or `Exclude` (negative exemplar, `label=False`)
-- **Output**: BrushLabels with Label Studio RLE encoding
+- **Box prompt**: RectangleLabels — any non-`Exclude` label is treated as positive; `Exclude` is a negative exemplar (`label=False`)
+- **Output**: BrushLabels with Label Studio RLE encoding (label resolved dynamically from context / labeling config)
 - **Scores display**: inference candidate scores written to `TextArea name="scores"` after each prediction
 - **Automatic GPU precision**: Detects GPU compute capability and uses optimal precision (TF32, bfloat16, or fp32)
 - **Multi-GPU support**: Uses accelerate `device_map="auto"` for automatic GPU dispatch (if available)
@@ -62,7 +62,7 @@ Three paths, all routed through `Sam3Processor` (no SAM2 fallback):
 |-------|------|-------|
 | TextArea only | Text-only PCS | `set_text_prompt()` → full-image detection, up to N masks. Image dimensions read from the loaded image (no geometric context required). |
 | TextArea + geometry | Mixed | `set_text_prompt()` then `add_geometric_prompt()` per box/point |
-| Geometry only | Geometric | `add_geometric_prompt()` per prompt; `Object` = `label=True`, `Exclude` = `label=False` |
+| Geometry only | Geometric | `add_geometric_prompt()` per prompt; non-`Exclude` = `label=True`, `Exclude` = `label=False` |
 
 > **Point prompts**: `Sam3Processor` only accepts boxes, not points. Each KeyPoint is represented as a tiny box (±0.5% of image dims) with `label=True/False` for positive/negative.
 

@@ -347,6 +347,75 @@ class NewModel(LabelStudioMLBase):
 
         return point_coords, point_labels, box
 
+    @staticmethod
+    def _extract_label_from_context_item(item: dict) -> Optional[str]:
+        """Extract a label name from one context result item."""
+        value = item.get("value", {})
+        item_type = item.get("type", "")
+
+        candidate_fields = [
+            item_type,
+            "brushlabels",
+            "rectanglelabels",
+            "keypointlabels",
+            "labels",
+        ]
+        for field in candidate_fields:
+            labels = value.get(field)
+            if isinstance(labels, list) and labels:
+                label = str(labels[0]).strip()
+                if label:
+                    return label
+        return None
+
+    def _resolve_brush_output(self, context: Optional[dict]) -> tuple[str, str, str]:
+        """Resolve BrushLabels schema and output label dynamically.
+
+        Priority:
+          1) First non-Exclude label from context result
+          2) First label from BrushLabels in parsed_label_config
+          3) "Object" as last-resort compatibility fallback
+        """
+        from_name = "brush"
+        to_name = "image"
+        try:
+            from_name, to_name, _ = self.get_first_tag_occurence("BrushLabels", "Image")
+        except Exception as exc:
+            logger.warning("get_first_tag_occurence(BrushLabels, Image) failed: %s", exc)
+
+        brush_labels = self.parsed_label_config.get(from_name, {}).get("labels", [])
+        allowed_labels = {str(label) for label in brush_labels}
+
+        selected_label: Optional[str] = None
+        if context:
+            for item in context.get("result", []):
+                item_to_name = item.get("to_name")
+                if item_to_name and item_to_name != to_name:
+                    continue
+
+                label = self._extract_label_from_context_item(item)
+                if not label:
+                    continue
+
+                lowered = label.lower()
+                if lowered in {"exclude", "background"}:
+                    continue
+
+                if allowed_labels and label not in allowed_labels:
+                    continue
+
+                if label:
+                    selected_label = label
+                    break
+
+        if selected_label is None:
+            if brush_labels:
+                selected_label = str(brush_labels[0])
+            else:
+                selected_label = "Object"
+
+        return from_name, to_name, selected_label
+
     # ── predict() ────────────────────────────────────────────────────────────
 
     def predict(
@@ -378,6 +447,8 @@ class NewModel(LabelStudioMLBase):
         # Resolve and load model
         self._ensure_model()
 
+        brush_from_name, brush_to_name, selected_label = self._resolve_brush_output(context)
+
         # Download image
         try:
             image = _load_image(image_url)
@@ -397,7 +468,15 @@ class NewModel(LabelStudioMLBase):
         # Run inference
         try:
             results, scores_list = self._run_inference(
-                image, point_coords, point_labels, box, img_w, img_h
+                image,
+                point_coords,
+                point_labels,
+                box,
+                img_w,
+                img_h,
+                brush_from_name,
+                brush_to_name,
+                selected_label,
             )
         except Exception as exc:
             logger.error("SAM2.1 inference error: %s", exc, exc_info=True)
@@ -413,6 +492,9 @@ class NewModel(LabelStudioMLBase):
         box: Optional[np.ndarray],
         img_w: int,
         img_h: int,
+        from_name: str,
+        to_name: str,
+        selected_label: str,
     ) -> tuple[list[dict], list[float]]:
         """Run SAM2 prediction and convert output to Label Studio format."""
         predictor = self._predictor  # local ref for thread safety
@@ -448,10 +530,10 @@ class NewModel(LabelStudioMLBase):
             "value": {
                 "format": "rle",
                 "rle": rle,
-                "brushlabels": ["Object"],
+                "brushlabels": [selected_label],
             },
-            "to_name": "image",
-            "from_name": "brush",
+            "to_name": to_name,
+            "from_name": from_name,
             "image_rotation": 0,
             "original_width": img_w,
             "original_height": img_h,
@@ -471,7 +553,7 @@ class NewModel(LabelStudioMLBase):
                 "id": "sam21_scores",
                 "type": "textarea",
                 "value": {"text": [score_lines]},
-                "to_name": "image",
+                "to_name": to_name,
                 "from_name": "scores",
             })
 

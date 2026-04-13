@@ -248,6 +248,25 @@ class NewModel(LabelStudioMLBase):
         t = threading.Thread(target=_monitor, daemon=True, name="sam21-video-idle-monitor")
         t.start()
 
+    def _resolve_default_track_label(self, from_name: str) -> str:
+        """Resolve a default tracking label from Label Studio config."""
+        labels = [str(label) for label in self.parsed_label_config.get(from_name, {}).get("labels", [])]
+        if labels:
+            for label in labels:
+                if label.lower() != "exclude":
+                    return label
+            return labels[0]
+
+        for cfg in self.parsed_label_config.values():
+            cfg_labels = [str(label) for label in cfg.get("labels", [])]
+            if cfg_labels:
+                for label in cfg_labels:
+                    if label.lower() != "exclude":
+                        return label
+                return cfg_labels[0]
+
+        return "Object"
+
     # ── Model selection ───────────────────────────────────────────────────────
     # _resolve_model_key is a module-level function (see above class).
     # ── predict() ────────────────────────────────────────────────────────────
@@ -297,7 +316,8 @@ class NewModel(LabelStudioMLBase):
             )
 
         # Parse prompts
-        geo_prompts = self._get_geo_prompts({"result": annotation_result})
+        default_track_label = self._resolve_default_track_label(from_name)
+        geo_prompts = self._get_geo_prompts({"result": annotation_result}, default_track_label)
         if not geo_prompts:
             logger.debug("Task %s: no geometric prompts found in annotation result", task_id)
             return ModelResponse(predictions=[])
@@ -571,20 +591,23 @@ class NewModel(LabelStudioMLBase):
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    def _get_geo_prompts(self, context: dict) -> list[dict]:
+    def _get_geo_prompts(self, context: dict, default_label: Optional[str] = None) -> list[dict]:
         """Parse VideoRectangle items into prompt dicts.
 
         Returns list of dicts:
           type='box':   obj_id, frame_idx, x_pct, y_pct, w_pct, h_pct, is_positive
           type='point': obj_id, frame_idx, x_pct, y_pct, is_positive
         """
+        if not default_label:
+            default_label = "Object"
+
         prompts: list[dict] = []
         for item in context.get("result", []):
             item_type = item.get("type")
 
             if item_type == "videorectangle":
                 obj_id = item["id"]
-                label_name = (item["value"].get("labels") or ["Object"])[0]
+                label_name = (item["value"].get("labels") or [default_label])[0]
                 is_positive = label_name.lower() != "exclude"
                 for seq in item["value"].get("sequence", []):
                     if not seq.get("enabled", True):
@@ -605,8 +628,8 @@ class NewModel(LabelStudioMLBase):
                 obj_id = item["id"]
                 value = item.get("value", {})
                 frame_idx = max(value.get("frame", 1) - 1, 0)
-                labels = value.get("keypointlabels", [])
-                is_positive = not (labels and labels[0] == "Exclude")
+                label_name = (value.get("keypointlabels") or [default_label])[0]
+                is_positive = label_name.lower() != "exclude"
                 prompts.append({
                     "type": "point",
                     "obj_id": obj_id,

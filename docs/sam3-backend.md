@@ -77,9 +77,11 @@ Settings → Labeling Interface → Code → 貼上 XML
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
 | `<TextArea name="text_prompt">` | 文字提示 | PCS 自然語言提示（純 SAM3 功能） |
-| `<KeyPointLabels smart="true">` | 點擊提示 | 正向（foreground）或負向（background）點 |
-| `<RectangleLabels smart="true">` | 框選提示 | SAM3 邊界框約束 |
+| `<KeyPointLabels smart="true">` | 點擊提示 | 任意標籤（非 Exclude）為正向點；Exclude/background 為負向點 |
+| `<RectangleLabels smart="true">` | 框選提示 | 任意標籤（非 Exclude）為正向框；Exclude 為負向框 |
 | `<BrushLabels smart="true">` | 輸出 | SAM3 遮罩（Label Studio RLE 格式）；**必須** `smart="true"` 否則前端不會觸發 predict |
+
+> 影像後端 `brushlabels` 會依 context 動態回填：優先採用使用者當前幾何提示標籤；若無幾何標籤則回退到 `<BrushLabels>` 第一個 label（再不行才 fallback `Object` 以維持相容）。
 
 ### Predict 路徑
 
@@ -136,7 +138,9 @@ Settings → Labeling Interface → Code → 貼上 XML
 | `<TextArea name="text_prompt">` | 文字提示 | PCS 自然語言提示（純 SAM3 功能） |
 | `<Labels name="videoLabels">` | 追蹤標籤 | 為追蹤物件指派語意標籤 |
 | `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框，SAM3 向前追蹤 |
-| `<KeyPointLabels name="kp" smart="true">` | 點擊提示 | 正向（Object）或負向（background）點 |
+| `<KeyPointLabels name="kp" smart="true">` | 點擊提示 | 任意標籤（非 Exclude）或負向標籤（Exclude/background）點 |
+
+> 影片後端對缺少 label 的幾何提示，會從 labeling config 取預設標籤，避免結果與專案自訂標籤脫鉤。
 
 ### 推論流程（video）
 

@@ -108,18 +108,20 @@ Settings → Labeling Interface → Code → 貼上 XML
 
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
-| `<KeyPointLabels smart="true">` | 點擊提示 | Object（正向）/ Exclude（負向）點 |
-| `<RectangleLabels smart="true">` | 框選提示 | Object（正向框）/ Exclude（負向框，轉為背景中心點） |
+| `<KeyPointLabels smart="true">` | 點擊提示 | 任意標籤（非 Exclude）為正向點；Exclude 為負向點 |
+| `<RectangleLabels smart="true">` | 框選提示 | 任意標籤（非 Exclude）為正向框；Exclude 為負向框（轉為背景中心點） |
 | `<BrushLabels smart="true">` | 輸出 | SAM2.1 分割遮罩（RLE 格式）；`smart="true"` 為必要條件 |
 | `<TextArea name="scores">` | 推論資訊 | 由 ML backend 自動填入：模型名稱 + 每個候選 mask 的分數 |
+
+> `brushlabels` 回傳值會動態解析：優先採用 context 中與目標 `to_name` 對應的合法標籤（排除 `Exclude` / `background`），若無可用值則回退到 `<BrushLabels>` 第一個 label。
 
 ### 提示解析規則
 
 | 提示 | 轉換 | SAM2 參數 |
 |------|------|-----------|
-| KeyPoint Object | pixel (x, y) | `point_coords`, `point_labels=1` |
+| KeyPoint 非 Exclude | pixel (x, y) | `point_coords`, `point_labels=1` |
 | KeyPoint Exclude | pixel (x, y) | `point_coords`, `point_labels=0` |
-| RectangleLabels Object | pixel [x0,y0,x1,y1] | `box`（只取第一個 FG box） |
+| RectangleLabels 非 Exclude | pixel [x0,y0,x1,y1] | `box`（只取第一個 FG box） |
 | RectangleLabels Exclude | BG box 中心點 | `point_coords`, `point_labels=0` |
 
 > SAM2 每次呼叫只接受一個 box prompt；多個 FG box 以第一個為準。BG box 自動轉為負向中心點。
@@ -134,6 +136,7 @@ NewModel.predict()
     ├── _resolve_model_key()          ← 從 MODEL_CHECKPOINT 推導邏輯模型名稱
     ├── _ensure_model()               ← lazy load / swap model
     ├── _load_image()                 ← 本機路徑直接讀取；s3:// → LS resolve endpoint；http → Token auth GET
+    ├── _resolve_brush_output()       ← 動態解析 from_name/to_name 與輸出標籤
     ├── _parse_prompts()              ← context → point_coords, point_labels, box
     └── _run_inference()
          ├── torch.autocast(bfloat16 / float16 by GPU arch)
@@ -143,7 +146,7 @@ NewModel.predict()
          ├── 取最高分 mask（argmax）
          ├── _mask_to_rle()          ← mask * 255 → brush.mask2rle → list[int]
          └── scores TextArea         ← "model: <key>\n#1  score=0.xxxx\n#2 … ✓ 最高分"
-    │  ModelResponse { brushlabels（單一最佳 mask）+ scores textarea }
+    │  ModelResponse { brushlabels（單一最佳 mask，label 與 from/to_name 皆動態）+ scores textarea }
     ▼
 Label Studio（渲染遮罩覆蓋層）
 ```
@@ -161,9 +164,11 @@ Settings → Labeling Interface → Code → 貼上 XML
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
 | `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框選取物件（不會自動觸發推論，需配合 Submit 按鈕） |
-| `<Labels name="videoLabels">` | 追蹤標籤 | Object（正向）/ Exclude（負向） |
+| `<Labels name="videoLabels">` | 追蹤標籤 | 任意標籤（非 Exclude）為正向；Exclude 為負向 |
 | `<TextArea name="run_trigger" showSubmitButton="true">` | 推論觸發器 | 框選後點擊 **Submit** 觸發 SAM2.1 追蹤（仿 sam3-video 作法） |
 | `<TextArea name="scores">` | 追蹤資訊 | 由 ML backend 自動填入：模型名稱 + 逐畫格 obj/mask info |
+
+> 影片幾何提示若缺少 label，後端會先從 labeling config 動態選預設 label（優先非 `Exclude`）；僅在未顯式傳入預設值的舊呼叫路徑，才維持 `Object` 相容 fallback。
 
 > **VideoRectangle `smart="true"` 不會自動觸發推論**：Label Studio 的即時 smart annotation 僅對影像工具（`RectangleLabels`、`KeyPointLabels`、`BrushLabels`）有效；`VideoRectangle` 畫框後需手動點擊 `run_trigger` TextArea 的 **Submit** 按鈕才會呼叫後端。
 >
