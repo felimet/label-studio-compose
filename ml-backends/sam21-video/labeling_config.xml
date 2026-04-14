@@ -1,0 +1,133 @@
+<!--
+  SAM2.1 Video Tracking — Label Studio Labeling Config
+  =====================================================
+  模型選擇（Choices checkbox）：
+    選擇要使用的 SAM2.1 模型變體。預設為 large。
+    除非重新更改 checkbox，否則系統一律使用最後一次選擇的模型。
+
+  推理觸發流程：
+    1. 確認工具列的 auto（⚡）smart 模式已啟用
+    2. 在影片某一畫格上繪製 VideoRectangle（選 Object 或 Exclude 標籤），放開即觸發追蹤
+       注意：Label Studio 的 KeyPoint 標記在 video 模式下不攜帶畫格資訊，
+             故不支援點提示，僅以 VideoRectangle 框選作為 prompt。
+    3. SAM2.1 向前追蹤最多 MAX_FRAMES_TO_TRACK 畫格
+    4. 結果以 VideoRectangle sequence 形式回傳
+
+  注意：SAM2.1 不支援文字提示，已移除 TextArea text_prompt。
+
+  Output:
+    VideoRectangle: 追蹤物件的逐畫格邊界框序列
+    scores        : 推理資訊（由 ML backend 自動填入）
+
+  樣式說明：
+    <Style> 配色以暗黑模式為基準。
+-->
+<View>
+  <Style>
+    .sam21-section {
+      background: #2a2a2a;
+      border: 1px solid #3d3d3d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    }
+    .sam21-label span {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px dashed #555;
+      cursor: help;
+      position: relative;
+    }
+    .sam21-label span[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      left: 0;
+      top: calc(100% + 4px);
+      background: #1e1e1e;
+      color: #ccc;
+      padding: 8px 10px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      font-size: 11px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: pre-line;
+      text-align: left;
+      width: 280px;
+      z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    .sam21-scores textarea {
+      font-family: monospace;
+      font-size: 11px;
+      color: #aaa;
+      background: #1a1a1a;
+    }
+    .lsf-main-content.lsf-requesting .sam21-hint span::after {
+      content: " ⏳ Running SAM2.1…";
+      color: #666;
+      font-size: 11px;
+      font-style: italic;
+      text-transform: none;
+      border-bottom: none;
+    }
+  </Style>
+
+  <Video name="video" value="$video" framerate="25.0"/>
+
+  <!-- Inference trigger (smart="true"):
+         - Confirm the toolbar's auto (⚡) Smart mode is enabled
+         - Pause video on the desired frame
+         - Select Object / Exclude from the Labels panel
+         - Draw a rectangle around the target and release → triggers tracking immediately
+         - Results are returned as a VideoRectangle sequence
+       Note: Label Studio's video KeyPointLabels do not carry frame information,
+             so only VideoRectangle box prompts are supported. -->
+  <View className="sam21-section">
+    <HyperText name="h_box" value="" className="sam21-label" inline="true">
+      <span title="1. 確認工具列 auto（⚡）smart 模式已啟用。&#10;2. 在影片上暫停至目標畫格。&#10;3. 選標籤後拖拉矩形框住目標，放開即觸發追蹤。&#10;&#10;Object  → 正向框（追蹤目標物件）&#10;Exclude → 負向框（告知模型排除此區域）&#10;&#10;注意：僅支援 VideoRectangle 框選提示。">Box Prompt</span>
+    </HyperText>
+    <VideoRectangle name="box" toName="video" smart="true"/>
+  </View>
+
+  <!-- Labels for tracking objects -->
+  <View className="sam21-section">
+    <HyperText name="h_labels" value="" className="sam21-label" inline="true">
+      <span title="為追蹤的物件貼上語意標籤。&#10;&#10;Object  → 正向框（追蹤目標物件）&#10;Exclude → 負向框（告知模型排除此區域）&#10;&#10;框選後從此處選取標籤；不選也可直接送出（allowEmpty）。">Track Labels</span>
+    </HyperText>
+    <Labels name="videoLabels" toName="video" allowEmpty="true">
+      <Label value="Object"  background="#11A39E"/>
+      <Label value="Exclude" background="#FF4D4F"/>
+    </Labels>
+  </View>
+
+  <!-- Inference trigger: draw box on target frame → click Submit → SAM2.1 tracks forward
+       (VideoRectangle smart="true" does not auto-fire in all LS versions;
+        this Submit button is the explicit trigger, same pattern as sam3-video) -->
+  <View className="sam21-section">
+    <HyperText name="h_run" value="" className="sam21-label sam21-hint" inline="true">
+      <span title="1. 確認 smart 模式（⚡）已啟用。&#10;2. 在目標畫格框選物件（Object 正向 / Exclude 負向）。&#10;3. 點擊下方 Submit 按鈕觸發 SAM2.1 向前追蹤。&#10;&#10;注意：SAM2.1 不支援文字提示，此欄位僅作為追蹤觸發器。&#10;按下後即呼叫後端，追蹤 MAX_FRAMES_TO_TRACK 畫格。">Run Tracking</span>
+    </HyperText>
+    <TextArea name="run_trigger" toName="video"
+              placeholder="Draw box first, then click Submit to run SAM2.1 tracking…"
+              perRegion="false" rows="1"
+              maxSubmissions="1" showSubmitButton="true" editable="true"/>
+  </View>
+
+  <!-- Inference info: filled by ML backend after each prediction -->
+  <View className="sam21-section sam21-scores">
+    <HyperText name="h_scores" value="" className="sam21-label" inline="true">
+      <span title="推理後由 ML backend 自動填入的追蹤資訊。">Tracking Info</span>
+    </HyperText>
+    <TextArea name="scores" toName="video"
+              placeholder="Tracking info appears here after prediction…"
+              perRegion="false" rows="3"
+              maxSubmissions="1" showSubmitButton="false" editable="false"/>
+  </View>
+
+</View>

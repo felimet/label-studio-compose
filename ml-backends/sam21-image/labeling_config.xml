@@ -1,0 +1,124 @@
+<!--
+  SAM2.1 Image Segmentation — Label Studio Labeling Config
+  =========================================================
+  模型選擇（Choices checkbox）：
+    選擇要使用的 SAM2.1 模型變體。預設為 large。
+    除非重新更改 checkbox，否則系統一律使用最後一次選擇的模型。
+
+  推理模式（由幾何操作觸發）：
+    Box-only  : 只框選 → SAM2 幾何分割
+    Point-only: 只點選 → SAM2 幾何分割
+    Box+Point : 混合提示 → 同時傳入 boxes 和 points
+
+  注意：SAM2.1 不支援文字提示（PCS），已移除 TextArea text_prompt。
+
+  Output:
+    BrushLabels: SAM2 返回的分割遮罩 (RLE 格式)
+    scores     : 每次推理後的候選 mask 分數（由 ML backend 自動填入）
+
+  樣式說明：
+    <Style> 內的配色以暗黑模式（dark background）為基準設計。
+    若使用明亮模式，請自行修改 <Style> 內的顏色值。
+-->
+<View>
+  <Style>
+    .sam21-section {
+      background: #2a2a2a;
+      border: 1px solid #3d3d3d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    }
+    .sam21-label span {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px dashed #555;
+      cursor: help;
+      position: relative;
+    }
+    .sam21-label span[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      left: 0;
+      top: calc(100% + 4px);
+      background: #1e1e1e;
+      color: #ccc;
+      padding: 8px 10px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      font-size: 11px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: pre-line;
+      text-align: left;
+      width: 280px;
+      z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    .sam21-scores textarea {
+      font-family: monospace;
+      font-size: 11px;
+      color: #aaa;
+      background: #1a1a1a;
+    }
+    .lsf-main-content.lsf-requesting .sam21-hint span::after {
+      content: " ⏳ Running SAM2.1…";
+      color: #666;
+      font-size: 11px;
+      font-style: italic;
+      text-transform: none;
+      border-bottom: none;
+    }
+  </Style>
+
+  <Image name="image" value="$image" zoom="true" zoomControl="true"/>
+
+<!-- Prompt: positive / negative keypoints -->
+  <View className="sam21-section">
+    <HyperText name="h_kp" value="" className="sam21-label" inline="true">
+      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 選 Object（正向，標記目標）&#10;   或 Exclude（負向，標記排除區域）。&#10;3. 點擊影像上的位置，立即觸發推理。">Keypoint Prompt</span>
+    </HyperText>
+    <KeyPointLabels name="kp" toName="image" smart="true">
+      <Label value="Object"  smart="true" background="#250dd3" showInline="true"/>
+      <Label value="Exclude" smart="true" background="#555555" showInline="true"/>
+    </KeyPointLabels>
+  </View>
+
+  <!-- Prompt: bounding box -->
+  <View className="sam21-section">
+    <HyperText name="h_rect" value="" className="sam21-label" inline="true">
+      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 選標籤後在影像上拖拉矩形，放開即觸發推理。&#10;&#10;Object  → 正向框（告訴模型要分割這個區域）&#10;Exclude → 負向框（告訴模型排除此區域）">Box Prompt</span>
+    </HyperText>
+    <RectangleLabels name="rect" toName="image" smart="true">
+      <Label value="Object"  background="#FFC069" showInline="true"/>
+      <Label value="Exclude" background="#FF4D4F" showInline="true"/>
+    </RectangleLabels>
+  </View>
+
+  <!-- Output: SAM2.1 segmentation mask -->
+  <View className="sam21-section">
+    <HyperText name="h_output" value="" className="sam21-label" inline="true">
+      <span title="SAM2.1 自動生成的分割遮罩（RLE 格式）。&#10;由 Keypoint 或 Box Prompt 觸發後自動填入。">Output — Segmentation Mask</span>
+    </HyperText>
+    <BrushLabels name="brush" toName="image" smart="true">
+      <Label value="Object" background="#FFA39E"/>
+    </BrushLabels>
+  </View>
+
+  <!-- Inference scores: filled by ML backend after each prediction -->
+  <View className="sam21-section sam21-scores">
+    <HyperText name="h_scores" value="" className="sam21-label" inline="true">
+      <span title="每次推理後，ML backend 自動填入候選 mask 的分數。&#10;格式：#rank  score=0.xxxx  box=[x0,y0,x1,y1]&#10;&#10;分數越高代表模型對該 mask 的信心越強。">Inference Scores</span>
+    </HyperText>
+    <TextArea name="scores" toName="image"
+              placeholder="Scores appear here after prediction…"
+              perRegion="false" rows="3"
+              maxSubmissions="1" showSubmitButton="false" editable="false"/>
+  </View>
+
+</View>
