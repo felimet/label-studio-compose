@@ -5,6 +5,8 @@
 # Secrets — NEVER commit
 .env
 .env.ml
+.env.supabase
+.env.tools
 
 # Documentation
 ONBOARDING.md
@@ -15,6 +17,7 @@ label-studio-data/
 minio-data/
 postgres-data/
 redis-data/
+redisinsight-data/
 logs/
 
 # HuggingFace model cache

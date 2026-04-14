@@ -1,0 +1,51 @@
+# ============================================================
+# Developer Tools Overlay
+# Usage:
+#   cp .env.tools.example .env.tools
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml up -d redisinsight
+# ============================================================
+
+services:
+  redisinsight:
+    image: redis/redisinsight:${REDISINSIGHT_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      - RI_APP_HOST=${REDISINSIGHT_APP_HOST:-0.0.0.0}
+      - RI_APP_PORT=${REDISINSIGHT_CONTAINER_PORT:-5540}
+      - RI_PROXY_PATH=${REDISINSIGHT_PROXY_PATH:-}
+      - RI_LOG_LEVEL=${REDISINSIGHT_LOG_LEVEL:-info}
+      - RI_STDOUT_LOGGER=${REDISINSIGHT_STDOUT_LOGGER:-true}
+      - RI_FILES_LOGGER=${REDISINSIGHT_FILES_LOGGER:-true}
+      - RI_DATABASE_MANAGEMENT=${REDISINSIGHT_DATABASE_MANAGEMENT:-true}
+      - RI_ACCEPT_TERMS_AND_CONDITIONS=${REDISINSIGHT_ACCEPT_TERMS_AND_CONDITIONS:-true}
+      - RI_ENCRYPTION_KEY=${REDISINSIGHT_ENCRYPTION_KEY:-}
+      - RI_SERVER_TLS_KEY=${REDISINSIGHT_SERVER_TLS_KEY:-}
+      - RI_SERVER_TLS_CERT=${REDISINSIGHT_SERVER_TLS_CERT:-}
+      - RI_REDIS_HOST=${REDISINSIGHT_REDIS_HOST:-redis}
+      - RI_REDIS_PORT=${REDISINSIGHT_REDIS_PORT:-6379}
+      - RI_REDIS_ALIAS=${REDISINSIGHT_REDIS_ALIAS:-label-studio-redis}
+      - RI_REDIS_USERNAME=${REDISINSIGHT_REDIS_USERNAME:-default}
+      - RI_REDIS_PASSWORD=${REDIS_PASSWORD}
+      - RI_REDIS_DB=${REDISINSIGHT_REDIS_DB:-0}
+      - RI_REDIS_TLS=${REDISINSIGHT_REDIS_TLS:-false}
+      - RI_REDIS_TLS_CA_BASE64=${REDISINSIGHT_REDIS_TLS_CA_BASE64:-}
+      - RI_REDIS_TLS_CA_PATH=${REDISINSIGHT_REDIS_TLS_CA_PATH:-}
+      - RI_REDIS_TLS_CERT_BASE64=${REDISINSIGHT_REDIS_TLS_CERT_BASE64:-}
+      - RI_REDIS_TLS_CERT_PATH=${REDISINSIGHT_REDIS_TLS_CERT_PATH:-}
+      - RI_REDIS_TLS_KEY_BASE64=${REDISINSIGHT_REDIS_TLS_KEY_BASE64:-}
+      - RI_REDIS_TLS_KEY_PATH=${REDISINSIGHT_REDIS_TLS_KEY_PATH:-}
+      - RI_PRE_SETUP_DATABASES_PATH=${REDISINSIGHT_PRE_SETUP_DATABASES_PATH:-}
+    ports:
+      - "${REDISINSIGHT_BIND_ADDRESS:-127.0.0.1}:${REDISINSIGHT_PORT:-15540}:${REDISINSIGHT_CONTAINER_PORT:-5540}"
+    volumes:
+      - ./redisinsight-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${REDISINSIGHT_CONTAINER_PORT:-5540}/api/health/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
