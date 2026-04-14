@@ -1,6 +1,6 @@
 # 環境變數設定說明
 
-所有變數定義於 `.env`（從 `.env.example` 複製後填入）。
+核心變數定義於 `.env`（建議由 `.env.example` 複製後填入）。
 
 > 讀者對象：部署者、維運、開發者
 >
@@ -13,12 +13,26 @@
 
 > **官方參考**：[Label Studio 部署指南](https://github.com/HumanSignal/label-studio/tree/4b222c5d63acd150277cc43d8326269ef567b595/docs/source/guide) — 環境變數、儲存後端、部署選項的原始說明文件。
 
+## 環境檔邊界
+
+為避免單一 env 檔過長，請依功能分層：
+
+| 檔案 | 用途 | 何時需要 |
+|------|------|----------|
+| `.env.example` → `.env` | 核心堆疊（pg-db / redis / minio / label-studio / nginx / cloudflared） | **必填** |
+| `.env.ml.example` → `.env.ml` | SAM3 / SAM2.1 後端 | 啟用 ML 疊加層時 |
+| `.env.supabase.example` → `.env.supabase` | Supabase 管理疊加層參數（Studio + Meta API） | 啟用 Supabase 疊加層時 |
+| `.env.tools.example` → `.env.tools` | RedisInsight 等開發工具 | 啟用工具疊加層時 |
+
+`.env.example` 為唯一完整核心模板。
+
 ## PostgreSQL
 
 以下為使用者填入 `.env` 的變數；compose 會將 `POSTGRES_*` 轉譯成 Label Studio 內部所需的 `POSTGRE_*` 格式（注意：LS 官方 env var 名稱無 `SDB` 中綴）。
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
+| `POSTGRES_VERSION` | `15.17` | PostgreSQL 映像版本（固定 patch 版本，避免漂移） |
 | `POSTGRES_USER` | `labelstudio` | 資料庫使用者名稱 |
 | `POSTGRES_PASSWORD` | — | **必填。** 強隨機密碼 |
 | `POSTGRES_DB` | `labelstudio` | 資料庫名稱 |
@@ -36,7 +50,7 @@
 | `MINIO_ROOT_USER` | — | 管理員帳號（僅用於 minio-init 初始化及 Admin UI） |
 | `MINIO_ROOT_PASSWORD` | — | 管理員密碼（≥8 字元） |
 | `MINIO_BUCKET` | `default-bucket` | 儲存桶名稱（逗號分隔可列多個，例如 `default-bucket,test`）；所列 bucket 均由 `make init-minio` 自動建立，service account 亦同時取得所有 bucket 的存取權 |
-| `MINIO_EXTERNAL_HOST` | `minio.example.com` | 對外公開網域；嵌入 Presigned URL |
+| `MINIO_EXTERNAL_HOST` | `minio-api.example.com` | 對外公開網域；嵌入 Presigned URL |
 | `MINIO_LS_ACCESS_ID` | `openssl rand -hex 10` | Label Studio 專用 access key（最小權限，限 `MINIO_BUCKET` 所列的所有 bucket）。由 `minio-init` 建立；**設定 LS Cloud Storage 時使用此帳號，不要用 root** |
 | `MINIO_LS_SECRET_KEY` | `openssl rand -hex 20` | 對應 secret key（≥8 字元） |
 | `MINIO_BUCKET_QUOTA_GB` | `200` | Bucket 容量上限（GiB）。**留空停用** |
@@ -145,7 +159,14 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 | 變數 | 說明 |
 |------|------|
 | `CLOUDFLARE_TUNNEL_TOKEN` | Zero Trust 儀表板產生的 Tunnel Token |
-| `MINIO_EXTERNAL_HOST` | MinIO 公開網域（同上，雙重用途） |
+| `MINIO_EXTERNAL_HOST` | MinIO S3 API 公開網域（例：`minio-api.example.com`） |
+| `MINIO_CONSOLE_HOST` | MinIO Console 公開網域（例：`minio-console.example.com`） |
+
+> 選用疊加層路由（`supabase-studio` / `supabase-meta` / `redisinsight`）不透過 env 變數定義，請直接在 Cloudflare Zero Trust 的 Tunnel Public Hostnames 設定：
+>
+> - `supabase-studio.example.com` → `http://supabase-studio:3000`
+> - `supabase-meta.example.com` → `http://supabase-meta:8080`（預設；若調整 `SUPABASE_META_CONTAINER_PORT`，此處需同步）
+> - `redisinsight.example.com` → `http://redisinsight:5540`
 
 詳細設定步驟見 [cloudflare-tunnel.md](cloudflare-tunnel.md)。
 
@@ -290,6 +311,102 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 <!-- END AUTO-GENERATED -->
 
+## Supabase 管理疊加層（`.env.supabase`）
+
+此區為 Supabase 管理疊加層專用（對齊 `supabase/supabase/docker` 變數命名），不應混入核心 `.env`。
+
+目前本專案啟用服務：
+
+- `supabase-studio`：管理 UI（`supabase/studio:latest`）
+- `supabase-meta`：PostgreSQL 管理 REST API（可開 Swagger 文件）
+- `supabase-storage` / `supabase-imgproxy`：**可選** S3 storage profile（`supabase-s3`）
+
+> `postgres-meta` 是 API，不是 Studio 介面。
+
+### 變數語意（請先理解）
+
+- `VAR=value`：傳入字串值
+- `VAR=`：空字串；若 compose 使用 `${VAR:-default}` 會改採預設值
+- `# VAR=value`：變數未定義（compose 可能改用預設）
+- `${VAR:?message}`：compose 強制必填；未定義或空字串都會啟動失敗
+
+### 目前疊加層必填
+
+| 變數 | 說明 |
+|------|------|
+| `POSTGRES_PASSWORD` | 供 Studio/Meta 連 `pg-db` 使用 |
+| `PG_META_CRYPTO_KEY` | Meta 加密金鑰（至少 32 字元） |
+
+### 目前疊加層常用（Studio + Meta）
+
+| 變數 | 說明 |
+|------|------|
+| `SUPABASE_STUDIO_BIND_ADDRESS` / `SUPABASE_STUDIO_PORT` | Studio host 綁定位址與埠號（預設 `127.0.0.1:18091`） |
+| `SUPABASE_META_BIND_ADDRESS` / `SUPABASE_META_PORT` | Meta host 綁定位址與埠號（預設 `127.0.0.1:18087`） |
+| `SUPABASE_META_CONTAINER_PORT` / `SUPABASE_META_HOST` | Meta 容器內監聽埠與位址 |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_DB` / `POSTGRES_USER` | Studio/Meta 使用的資料庫連線座標（預設沿用核心 `.env`） |
+| `PG_META_DB_SSL_MODE` / `PG_META_DB_SSL_ROOT_CERT` | Meta 連線 DB 的 SSL 設定 |
+| `PG_CONN_TIMEOUT_SECS` / `PG_QUERY_TIMEOUT_SECS` | Meta 連線與查詢逾時 |
+| `PG_META_MAX_RESULT_SIZE_MB` / `PG_META_MAX_BODY_LIMIT_MB` | Meta API 輸出與 request body 上限 |
+| `STUDIO_DEFAULT_ORGANIZATION` / `STUDIO_DEFAULT_PROJECT` | Studio 初始組織與專案名稱 |
+| `SUPABASE_URL` / `SUPABASE_PUBLIC_URL` | Studio 顯示用內部/外部 URL |
+| `JWT_SECRET` / `ANON_KEY` / `SERVICE_ROLE_KEY` | 保留給完整 Supabase 堆疊；在目前 overlay 可留空 |
+
+### 可選 `supabase-s3` profile（Storage + imgproxy）
+
+| 變數 | 說明 |
+|------|------|
+| `SUPABASE_STORAGE_IMAGE` | Storage API 映像（預設 `supabase/storage-api:v1.48.26`） |
+| `SUPABASE_IMGPROXY_IMAGE` | imgproxy 映像（預設 `darthsim/imgproxy:v3.30.1`） |
+| `SUPABASE_STORAGE_BACKEND` | 建議 `s3`（本專案 MinIO） |
+| `SUPABASE_STORAGE_BUCKET` | Storage 使用 bucket（建議對應 `MINIO_BUCKET`） |
+| `SUPABASE_STORAGE_S3_ENDPOINT` | MinIO endpoint（預設 `http://minio:9000`） |
+| `SUPABASE_STORAGE_S3_PROTOCOL` | `http` 或 `https` |
+| `SUPABASE_STORAGE_S3_FORCE_PATH_STYLE` | MinIO 建議 `true` |
+| `SUPABASE_STORAGE_REGION` | S3 region 標記值 |
+| `SUPABASE_STORAGE_TENANT_ID` | Storage tenant id（預設 `label-studio`） |
+| `SUPABASE_STORAGE_FILE_SIZE_LIMIT` | 單檔上限（bytes） |
+| `SUPABASE_STORAGE_ENABLE_IMAGE_TRANSFORMATION` | 是否啟用影像轉換 |
+| `SUPABASE_STORAGE_POSTGREST_URL` | PostgREST endpoint（Storage 需要） |
+| `SUPABASE_STORAGE_DATABASE_URL` | 留空則由 compose 以 `POSTGRES_*` 組合 |
+
+> 啟用前置條件：
+>
+> - 先執行 `make init-minio`，確保 `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY` 已存在（Storage 直接使用這組最小權限憑證）。
+> - 需可用 PostgREST endpoint；僅有 Studio + Meta 的最小疊加層不等同完整 Supabase API 堆疊。
+> - `supabase-s3` profile 服務不對 host 發布埠號：`supabase-storage:5000`、`supabase-imgproxy:5001` 都是 internal network。
+
+### 保留給完整 Supabase 堆疊（目前可留空或註解）
+
+`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、`JWT_KEYS`、`JWT_JWKS`、`SITE_URL`、`DISABLE_SIGNUP`、`SMTP_*`、`ENABLE_PHONE_*`、`GLOBAL_S3_BUCKET`、`FUNCTIONS_VERIFY_JWT`、`KONG_*` 等變數目前尚未接線到本專案服務，保留是為了與官方模板維持對齊。
+
+### 路由設定
+
+`supabase-studio` / `supabase-meta` 對外路由請直接在 Cloudflare Tunnel Public Hostnames 設定，不使用 `*_EXTERNAL_HOST` 變數。若修改 `SUPABASE_META_CONTAINER_PORT`，請同步更新 Cloudflare 的 service target 埠號。
+
+## 開發工具（`.env.tools`）
+
+| 變數 | 說明 |
+|------|------|
+| `REDISINSIGHT_VERSION` | RedisInsight 映像標籤（預設 `latest`，建議正式環境固定版本） |
+| `REDISINSIGHT_BIND_ADDRESS` | 本機 host 綁定位址（預設 `127.0.0.1`，降低暴露面） |
+| `REDISINSIGHT_PORT` | RedisInsight 對外 host port（預設 `15540`） |
+| `REDISINSIGHT_CONTAINER_PORT` | RedisInsight 容器內服務埠（預設 `5540`） |
+| `REDISINSIGHT_APP_HOST` | RedisInsight 監聽位址（預設 `0.0.0.0`） |
+| `REDISINSIGHT_PROXY_PATH` | 反向代理子路徑（預設空；path-rewrite 不建議） |
+| `REDISINSIGHT_ENCRYPTION_KEY` | 本機持久化資料加密 key（若啟用且有持久化 volume，需固定） |
+| `REDISINSIGHT_LOG_LEVEL` | 日誌層級（`error` ~ `silly`） |
+| `REDISINSIGHT_STDOUT_LOGGER` / `REDISINSIGHT_FILES_LOGGER` | 啟用 stdout / 檔案日誌 |
+| `REDISINSIGHT_DATABASE_MANAGEMENT` | 是否允許在 UI 中新增/修改/刪除連線 |
+| `REDISINSIGHT_ACCEPT_TERMS_AND_CONDITIONS` | 自動接受 EULA（無 UI 首次確認流程） |
+| `REDISINSIGHT_SERVER_TLS_KEY` / `REDISINSIGHT_SERVER_TLS_CERT` | RedisInsight 內建 HTTPS key/cert（PEM） |
+| `REDISINSIGHT_REDIS_HOST` / `REDISINSIGHT_REDIS_PORT` | 預先注入 Redis 連線位置 |
+| `REDISINSIGHT_REDIS_ALIAS` / `REDISINSIGHT_REDIS_USERNAME` | 預先注入 Redis 連線識別 |
+| `REDISINSIGHT_REDIS_TLS` | 是否啟用 TLS 連線至 Redis |
+| `REDISINSIGHT_REDIS_TLS_CA_*` / `REDISINSIGHT_REDIS_TLS_CERT_*` / `REDISINSIGHT_REDIS_TLS_KEY_*` | TLS 憑證可用 Base64 或檔案路徑形式提供 |
+| `REDISINSIGHT_REDIS_DB` | 預設連線 DB index |
+| `REDISINSIGHT_PRE_SETUP_DATABASES_PATH` | 預先注入連線 JSON 檔路徑 |
+
 ## 產生強密碼
 
 ```bash
@@ -312,7 +429,7 @@ openssl rand -base64 24
 |-------------|-----------|----------|------|----------|
 | `./ls-data/` | `/label-studio/data/` | label-studio | 標注資料、匯出檔 | 直接 `tar` 壓縮 |
 | `./ls-data/file/` | `/label-studio/data/file/` | label-studio | **Local files storage 根目錄**（詳見下方說明） | 直接 `tar` 壓縮 |
-| `./postgres-data/` | `/var/lib/postgresql/data/` | db | 資料庫（PostgreSQL 內部格式） | **必須用 `pg_dump`**，不可直接複製 |
+| `./postgres-data/` | `/var/lib/postgresql/data/` | pg-db | 資料庫（PostgreSQL 內部格式） | **必須用 `pg_dump`**，不可直接複製 |
 | `./minio-data/` | `/data/` | minio | 上傳的影像、影片等媒體檔案 | 直接 `tar` 壓縮 |
 | `./redis-data/` | `/data/` | redis | 任務佇列暫存（重啟後自動恢復） | 通常不需備份 |
 | `./scripts/` | `/scripts/` | minio-init（唯讀） | MinIO 初始化腳本 | 版本控制中，無需另行備份 |
@@ -434,9 +551,11 @@ label-studio:
 ```bash
 docker compose down
 
-# Label Studio 媒體資料（從舊目錄重新命名）
-mv ./ls-data ./ls-data
-mkdir -p ls-data/file
+# Label Studio 媒體資料（若舊目錄為 label-studio-data，改名為 ls-data）
+if [ -d ./label-studio-data ] && [ ! -d ./ls-data ]; then
+  mv ./label-studio-data ./ls-data
+fi
+mkdir -p ./ls-data/file
 
 # 若舊版已有 local_storage_file，確保結構正確
 # 舊：./ls-data/local_storage_file/
@@ -450,7 +569,8 @@ docker run --rm \
   -v "$(pwd)/ls-data:/dst" \
   alpine sh -c "cp -a /src/. /dst/"
 
-# PostgreSQL（直接複製二進位檔案）
+# PostgreSQL named volume -> bind mount（僅限同版本同平台搬移）
+# ⚠️ 若是備份、跨主機或跨 major 版本遷移，請改用 pg_dump/restore。
 docker run --rm \
   -v label-studio_postgres-data:/src \
   -v "$(pwd)/postgres-data:/dst" \

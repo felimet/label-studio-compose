@@ -74,7 +74,7 @@ make test-sam3-image
 調整 env 變數時，維持程式、範例檔、文件一致。
 
 ### 變更清單
-1. 更新 `.env.example` 或 `.env.ml.example`
+1. 更新 `.env.example` / `.env.ml.example` / `.env.supabase.example` / `.env.tools.example`
 2. 更新 [../configuration.md](../configuration.md) 對應段落
 3. 若操作流程受影響，更新對應 cookbook
 4. 若健康檢查或啟動路徑受影響，更新 [../RUNBOOK.md](../RUNBOOK.md)

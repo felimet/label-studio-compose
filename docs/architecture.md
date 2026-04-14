@@ -17,20 +17,38 @@ graph TD
     CF[cloudflared 容器<br/>主動出站連線]
     Nginx[nginx:80<br/>反向代理]
     MinioAPI[minio:9000<br/>S3 API + Presigned URL]
+    MinioConsole[minio:9001<br/>Console UI]
+    MinioAdmin[minio:9002<br/>Admin UI（高權限）]
     LS[label-studio:8080<br/>Django 應用]
-    DB[(db:5432<br/>PostgreSQL)]
+    DB[(pg-db:5432<br/>PostgreSQL)]
     Redis[(redis:6379<br/>任務佇列)]
+    SStudio[supabase-studio:3000<br/>Supabase 管理 UI]
+    SMeta[supabase-meta:8080<br/>Schema / migration API]
+    RInsight[redisinsight:5540<br/>Redis UI]
     SAM3I[sam3-image-backend:9090<br/>SAM3 影像分割]
     SAM3V[sam3-video-backend:9090<br/>SAM3 影片追蹤]
 
     Internet --> CFEdge
     CFEdge -- "label-studio.example.com" --> CF
-    CFEdge -- "minio.example.com<br/>WAF: GET/HEAD only" --> CF
+    CFEdge -- "minio-api.example.com<br/>WAF: GET/HEAD only" --> CF
+    CFEdge -- "minio-console.example.com" --> CF
+    CFEdge -. "minio-admin.example.com<br/>CF Access" .-> CF
+    CFEdge -. "supabase-studio.example.com<br/>CF Access" .-> CF
+    CFEdge -. "supabase-meta.example.com<br/>CF Access" .-> CF
+    CFEdge -. "redisinsight.example.com<br/>CF Access" .-> CF
     CF --> Nginx
     CF --> MinioAPI
+    CF --> MinioConsole
+    CF -. "optional management route" .-> MinioAdmin
+    CF -. "optional overlay" .-> SStudio
+    CF -. "optional overlay" .-> SMeta
+    CF -. "optional overlay" .-> RInsight
     Nginx --> LS
     LS --> DB
     LS --> Redis
+    SStudio -.-> SMeta
+    SMeta -.-> DB
+    RInsight -.-> Redis
     LS -. "內部 S3 呼叫" .-> MinioAPI
     SAM3I -. "ML overlay<br/>opt-in" .-> LS
     SAM3V -. "ML overlay<br/>opt-in" .-> LS
@@ -40,10 +58,13 @@ graph TD
 
 ```mermaid
 graph LR
-    DB[db<br/>healthy]
+    DB[pg-db<br/>healthy]
     Redis[redis<br/>healthy]
     Minio[minio<br/>healthy]
     MinioInit[minio-init<br/>手動 make init-minio]
+    SStudio[supabase-studio<br/>optional overlay]
+    SMeta[supabase-meta<br/>optional overlay]
+    RInsight[redisinsight<br/>optional overlay]
     LS[label-studio<br/>healthy]
     SAM3I[sam3-image-backend<br/>ML overlay]
     SAM3V[sam3-video-backend<br/>ML overlay]
@@ -53,6 +74,10 @@ graph LR
     DB --> LS
     Redis --> LS
     Minio --> LS
+    DB --> SStudio
+    SMeta --> SStudio
+    DB --> SMeta
+    Redis --> RInsight
     Minio -.-> MinioInit
     LS --> SAM3I
     LS --> SAM3V
@@ -65,7 +90,7 @@ graph LR
 ```mermaid
 sequenceDiagram
     participant B as 瀏覽器
-    participant CF as Cloudflare Edge<br/>(WAF: GET/HEAD)
+    participant CF as Cloudflare Edge<br/>(WAF: GET/HEAD for minio-api)
     participant M as minio:9000
     participant LS as label-studio
 
@@ -73,7 +98,7 @@ sequenceDiagram
     M-->>LS: OK + Presigned URL<br/>(HMAC-SHA256, 時效限制)
     LS-->>B: 回傳含 Presigned URL 的回應
 
-    B->>CF: GET minio.example.com/bucket/file?X-Amz-Signature=...
+    B->>CF: GET minio-api.example.com/bucket/file?X-Amz-Signature=...
     CF->>M: 轉發（WAF 驗證通過）
     M-->>B: 檔案內容
 ```
@@ -82,7 +107,7 @@ sequenceDiagram
 
 | Volume / 路徑 | 類型 | 掛載服務 | 內容 |
 |---------------|------|----------|------|
-| `./postgres-data` | bind mount | db | PostgreSQL 資料檔 |
+| `./postgres-data` | bind mount | pg-db | PostgreSQL 資料檔 |
 | `./redis-data` | bind mount | redis | Redis AOF / RDB |
 | `./minio-data` | bind mount | minio | 物件儲存資料 |
 | `./ls-data` | bind mount | label-studio | 媒體檔、匯出、上傳；host 端可直接觀察 |
@@ -103,8 +128,17 @@ sequenceDiagram
 | label-studio | 18086 | Django 應用直連（繞過 nginx） |
 | minio API | 19000 | S3 端點（`aws s3`、SDK、presigned URL） |
 | minio console | 19001 | MinIO 後台管理 UI（`http://localhost:19001`） |
+| minio admin | 19002 | MinIO Full Admin UI（`http://localhost:19002`） |
 | postgres | 5433 | 避免與本機 PostgreSQL 衝突 |
-| redis | 6380 | 避免與本機 Redis 衝突 |
+| redis | 16380 | 避免與本機 Redis 衝突 |
+
+選用疊加層（預設僅綁 loopback）：
+
+| 服務 | 主機埠號 | 說明 |
+|------|----------|------|
+| supabase-studio | 127.0.0.1:18091 | Supabase 管理 UI（建議僅內部 + CF Access） |
+| supabase-meta | 127.0.0.1:18087 | PostgreSQL schema / migration API（建議僅內部 + CF Access） |
+| redisinsight | 127.0.0.1:15540 | Redis GUI（建議僅內部 + CF Access） |
 
 ## SAM3 ML 疊加層
 
@@ -146,6 +180,6 @@ nginx 純粹充當反向代理角色，將所有請求轉發至 Label Studio app
 | 決策 | 理由 |
 |------|------|
 | MinIO WAF：僅 GET/HEAD | Presigned URL 已有 HMAC 驗證；防止資料竄改與儲存桶列舉 |
-| MinIO 不使用 CF Access | CF Access 會攔截 Presigned URL，破壞瀏覽器直接存取 |
+| MinIO 分流保護 | `minio-api` 不使用 CF Access（避免破壞 Presigned URL）；`minio-admin` 必須使用 CF Access；`minio-console` 建議使用 CF Access |
 | `SSRF_PROTECTION_ENABLED=false` | Label Studio 需呼叫內部 `minio:9000`；僅對可信內部網段放行 |
 | 非 root 使用者（uid 1001） | SAM3 容器與 Label Studio 容器均以非 root 身份執行 |

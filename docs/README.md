@@ -30,6 +30,7 @@
 - [sam21-backend.md](sam21-backend.md)：SAM2.1 後端機制、限制、效能議題
 - [RUNBOOK.md](RUNBOOK.md)：維運、事故、備份、還原
 - [CONTRIBUTING.md](CONTRIBUTING.md)：開發流程與提交規範
+- [releases/v1.1.0-plan.md](releases/v1.1.0-plan.md)：次版本節奏與遷移里程碑
 
 ## 4. 文件責任邊界（避免重複）
 
@@ -42,6 +43,6 @@
 
 當你修改以下內容時，請同步更新文件：
 
-- `.env.example` / `.env.ml.example` 變更：同步更新 [configuration.md](configuration.md) 與對應 cookbook。
+- `.env.example` / `.env.ml.example` / `.env.supabase.example` / `.env.tools.example` 變更：同步更新 [configuration.md](configuration.md) 與對應 cookbook。
 - Makefile 指令變更：同步更新三份 cookbook 與 [CONTRIBUTING.md](CONTRIBUTING.md)。
 - 新增服務或網路邊界：同步更新 [architecture.md](architecture.md) 與 [RUNBOOK.md](RUNBOOK.md)。
