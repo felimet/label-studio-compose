@@ -9,7 +9,7 @@
         test-sam3-image test-sam3-video \
         test-sam21-image test-sam21-video \
 		supabase-up supabase-down supabase-logs \
-		supabase-s3-up supabase-s3-down supabase-s3-logs \
+		supabase-standalone-up supabase-standalone-down supabase-standalone-logs \
 	tools-up tools-down tools-logs \
         init-minio health create-admin reset-password \
         push
@@ -34,9 +34,8 @@ ps:
 # override.yml must be included explicitly when using -f flags
 # (Docker Compose only auto-loads override.yml when no -f is specified)
 ML_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
-SUPABASE_COMPOSE_BASE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.yml
-SUPABASE_COMPOSE = docker compose --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.yml
-SUPABASE_S3_COMPOSE = docker compose --profile supabase-s3 --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.yml
+SUPABASE_STANDALONE_ENV ?= .env.supabase
+SUPABASE_STANDALONE_COMPOSE = docker compose --env-file $(SUPABASE_STANDALONE_ENV) -f docker-compose.supabase.yml
 TOOLS_COMPOSE_BASE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
 TOOLS_COMPOSE = docker compose --env-file .env --env-file .env.tools -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
 
@@ -94,39 +93,25 @@ test-sam21-image:
 test-sam21-video:
 	$(ML_COMPOSE) exec sam21-video-backend python -m pytest tests/ --tb=short -v
 
-# ─── Supabase Admin Overlay (Studio + Meta API) ─────────────
+# ─── Supabase Management (default: standalone) ─────────────
 supabase-up:
-	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
-	@test -f .env.supabase || (echo "Missing .env.supabase. Run: cp .env.supabase.example .env.supabase" && exit 1)
-	$(SUPABASE_COMPOSE) up -d supabase-meta supabase-studio
+	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
+	$(SUPABASE_STANDALONE_COMPOSE) up -d
 
 supabase-down:
-	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
-	@test -f .env.supabase || (echo "Missing .env.supabase. Run: cp .env.supabase.example .env.supabase" && exit 1)
-	-$(SUPABASE_COMPOSE) stop supabase-studio supabase-meta
-	-$(SUPABASE_COMPOSE) rm -f supabase-studio supabase-meta
+	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
+	$(SUPABASE_STANDALONE_COMPOSE) down
 
 supabase-logs:
-	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
-	@test -f .env.supabase || (echo "Missing .env.supabase. Run: cp .env.supabase.example .env.supabase" && exit 1)
-	$(SUPABASE_COMPOSE) logs -f --tail=100 supabase-studio supabase-meta
+	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
+	$(SUPABASE_STANDALONE_COMPOSE) logs -f --tail=100 studio meta db
 
-# ─── Supabase S3 Storage Overlay (profile: supabase-s3) ─────
-supabase-s3-up:
-	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
-	@test -f .env.supabase || (echo "Missing .env.supabase. Run: cp .env.supabase.example .env.supabase" && exit 1)
-	$(SUPABASE_S3_COMPOSE) up -d supabase-imgproxy supabase-storage
+# Explicit aliases for standalone mode.
+supabase-standalone-up: supabase-up
 
-supabase-s3-down:
-	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
-	@test -f .env.supabase || (echo "Missing .env.supabase. Run: cp .env.supabase.example .env.supabase" && exit 1)
-	-$(SUPABASE_S3_COMPOSE) stop supabase-storage supabase-imgproxy
-	-$(SUPABASE_S3_COMPOSE) rm -f supabase-storage supabase-imgproxy
+supabase-standalone-down: supabase-down
 
-supabase-s3-logs:
-	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
-	@test -f .env.supabase || (echo "Missing .env.supabase. Run: cp .env.supabase.example .env.supabase" && exit 1)
-	$(SUPABASE_S3_COMPOSE) logs -f --tail=100 supabase-storage supabase-imgproxy
+supabase-standalone-logs: supabase-logs
 
 # ─── Developer Tools ─────────────────────────────────────────
 tools-up:

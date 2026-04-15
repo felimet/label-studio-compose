@@ -27,7 +27,8 @@ x-logging: &default-logging
 services:
   # ── PostgreSQL ──────────────────────────────────────────────
   pg-db:
-    image: "postgres:${POSTGRES_VERSION:-15.17}"
+    # v1.1.0 direct lane: run core DB on Supabase Postgres runtime.
+    image: "${PG_DB_IMAGE:-supabase/postgres:15.14.1.107}"
     restart: unless-stopped
     logging: *default-logging
     environment:
