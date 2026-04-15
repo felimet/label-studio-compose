@@ -1,6 +1,10 @@
 ﻿# label-anything-sam
 
-Production-ready Label Studio deployment stack with optional SAM3 and SAM2.1 ML backends.
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![Supabase Standalone](https://img.shields.io/badge/Supabase-Standalone-3ECF8E?logo=supabase&logoColor=white)
+![Label Studio](https://img.shields.io/badge/Label%20Studio-Production%20Stack-7F52FF)
+![SAM Backends](https://img.shields.io/badge/SAM-SAM3%20%2B%20SAM2.1-FF6B35)
 
 Traditional Chinese version: [README.zh-TW.md](README.zh-TW.md)
 
@@ -11,6 +15,25 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 - Core services: Label Studio + PostgreSQL + Redis + MinIO + Nginx + Cloudflare Tunnel
 - Optional GPU overlays: SAM3 image/video backends and SAM2.1 image/video backends
 - Security-first defaults for S3 access, token usage, and network exposure
+
+> [!NOTE]
+> Prefer native PostgreSQL for Label Studio data (no Supabase)?
+>
+> - Use tag `v1.0.0` for the pre-Supabase baseline.
+> - This mode has fewer parameters and is suitable for personal use / quick startup.
+> - You can get `v1.0.0` in any of these ways:
+>   1. Git checkout (recommended for local dev)
+>   2. Download `Source code (zip)` from Release `v1.0.0`
+>   3. Switch Branch/Tag to `v1.0.0` in GitHub UI
+>
+> ```bash
+> git fetch --tags
+> git checkout tags/v1.0.0 -b local-v1-native-pg
+> ```
+>
+> In `v1.0.0`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
+>
+> If this feature branch is merged later, you can stay on `main` for latest defaults, or switch Branch/Tag to `v1.0.0` when you need the legacy native-PG mode.
 
 ## Quick Start
 
@@ -78,6 +101,52 @@ Verify stack health:
 make health
 ```
 
+## Direct Compose (Without Make)
+
+If you prefer typing `docker compose -f ... up` directly, keep two safeguards enabled:
+
+1. Interpolation safeguard: always provide a fixed project name plus explicit env files.
+2. Runtime safeguard: keep service-level `env_file` (for ML backends) and required vars (`${VAR:?}`) in compose files.
+
+PowerShell session defaults (recommended):
+
+```powershell
+$env:COMPOSE_PROJECT_NAME = "label-anything-sam"
+```
+
+Standalone Supabase (default branch runtime):
+
+```bash
+docker compose --project-name label-anything-sam \
+	--env-file .env --env-file .env.supabase \
+	-f docker-compose.supabase.yml up -d
+```
+
+Supabase sample mode:
+
+```bash
+docker compose --project-name label-anything-sam \
+	--env-file .env --env-file .env.supabase.sample \
+	-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.sample.yml up -d
+```
+
+ML overlays:
+
+```bash
+docker compose --project-name label-anything-sam \
+	--env-file .env \
+	-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml up -d
+```
+
+Optional one-liner fallback (`--env-file` omitted):
+
+```powershell
+$env:COMPOSE_ENV_FILES = ".env,.env.supabase"
+docker compose -f docker-compose.supabase.yml config -q
+```
+
+`COMPOSE_ENV_FILES` is only used when CLI `--env-file` is not provided.
+
 ## Critical Notes Before You Continue
 
 - Use **Legacy Token** for ML backends, not Personal Access Token.
@@ -92,7 +161,7 @@ To avoid one oversized env file, variables are split by scope:
 - `.env.example` → `.env`: Core runtime stack (required)
 - `.env.ml.example` → `.env.ml`: SAM3/SAM2.1 backends (optional)
 - `.env.tools.example` → `.env.tools`: Local dev tools such as RedisInsight (optional)
-- `.env.supabase.example` → `.env.supabase`: Supabase standalone management stack (without native pg-db)
+- `.env.supabase.example` → `.env.supabase`: Supabase standalone management stack (required)
 - `.env.supabase.sample.template` → `.env.supabase.sample`: Supabase minimal example mode (documentation/demo only)
 
 Supabase mode boundaries:

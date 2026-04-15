@@ -1,6 +1,10 @@
 ﻿# label-anything-sam
 
-適用於生產環境的 Label Studio 部署方案，內含可選用的 SAM3 與 SAM2.1 ML 後端。
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![Supabase Standalone](https://img.shields.io/badge/Supabase-Standalone-3ECF8E?logo=supabase&logoColor=white)
+![Label Studio](https://img.shields.io/badge/Label%20Studio-Production%20Stack-7F52FF)
+![SAM Backends](https://img.shields.io/badge/SAM-SAM3%20%2B%20SAM2.1-FF6B35)
 
 English version: [README.md](README.md)
 
@@ -11,6 +15,25 @@ English version: [README.md](README.md)
 - 核心服務：Label Studio + PostgreSQL + Redis + MinIO + Nginx + Cloudflare Tunnel
 - 可選 GPU 疊加：SAM3 影像/影片後端與 SAM2.1 影像/影片後端
 - 以安全為先的預設：S3 最小權限、Token 使用規範、對外暴露邊界
+
+> [!NOTE]
+> 若不使用 Supabase，想讓 Label Studio 以原生 PostgreSQL 管理資料：
+>
+> - 請改用 `v1.0.0` tag（Supabase 導入前基線）。
+> - 該模式參數較少，適合個人使用與快速啟用。
+> - 取得 `v1.0.0` 可用以下方式：
+>   1. 用 git checkout（本機開發建議）
+>   2. 到 Release `v1.0.0` 下載 `Source code (zip)`
+>   3. 在 GitHub 介面把 Branch/Tag 切到 `v1.0.0`
+>
+> ```bash
+> git fetch --tags
+> git checkout tags/v1.0.0 -b local-v1-native-pg
+> ```
+>
+> 在 `v1.0.0` 中，Label Studio 資料會儲存在原生 PostgreSQL（`pg-db`），不需要 `.env.supabase` 與 `make supabase-up`。
+>
+> 若此功能分支後續合併進 `main`，可留在 `main` 使用最新預設；需要舊版原生 PG 模式時，再把 Branch/Tag 切回 `v1.0.0`。
 
 ## 快速開始
 
@@ -78,6 +101,52 @@ redisinsight.example.com    -> http://redisinsight:5540
 make health
 ```
 
+## 直接手打 Compose（不走 Make）
+
+若你偏好直接手打 `docker compose -f ... up`，建議同時啟用兩層保護：
+
+1. 解析層保護：固定 `project name` 並明確指定 `--env-file`。
+2. 容器層保護：保留服務內 `env_file`（例如 ML）與 compose 內 `${VAR:?}` 必填檢查。
+
+PowerShell 建議先設定：
+
+```powershell
+$env:COMPOSE_PROJECT_NAME = "label-anything-sam"
+```
+
+Supabase standalone（本分支預設）：
+
+```bash
+docker compose --project-name label-anything-sam \
+	--env-file .env --env-file .env.supabase \
+	-f docker-compose.supabase.yml up -d
+```
+
+Supabase 示例模式：
+
+```bash
+docker compose --project-name label-anything-sam \
+	--env-file .env --env-file .env.supabase.sample \
+	-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.sample.yml up -d
+```
+
+ML 疊加層：
+
+```bash
+docker compose --project-name label-anything-sam \
+	--env-file .env \
+	-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml up -d
+```
+
+可選備援（不帶 `--env-file` 時）：
+
+```powershell
+$env:COMPOSE_ENV_FILES = ".env,.env.supabase"
+docker compose -f docker-compose.supabase.yml config -q
+```
+
+注意：`COMPOSE_ENV_FILES` 只有在命令列沒有提供 `--env-file` 時才會生效。
+
 ## 開始前請先注意
 
 - ML 後端必須使用 **Legacy Token**，不可使用 Personal Access Token。
@@ -92,7 +161,7 @@ make health
 - `.env.example` → `.env`：核心執行堆疊（必填）
 - `.env.ml.example` → `.env.ml`：SAM3/SAM2.1 後端（選填）
 - `.env.tools.example` → `.env.tools`：RedisInsight 等本機工具（選填）
-- `.env.supabase.example` → `.env.supabase`：Supabase 獨立管理 stack（不使用原生 pg-db）
+- `.env.supabase.example` → `.env.supabase`：Supabase 獨立管理 stack（必填）
 - `.env.supabase.sample.template` → `.env.supabase.sample`：Supabase 示例模式最小集合（僅文檔示例）
 
 Supabase 模式邊界：

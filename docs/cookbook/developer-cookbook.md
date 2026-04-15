@@ -6,12 +6,17 @@
 ## 任務 1：啟動可開發環境
 
 ### 目標
-啟動核心服務與（可選）ML 後端，讓本機可直接開發與測試。
+啟動核心服務、Supabase standalone（預設 DB 路徑），以及（可選）ML 後端，讓本機可直接開發與測試。
 
 ### 步驟
 ```bash
 cp .env.example .env
+cp .env.supabase.example .env.supabase
 # 編輯 .env
+# 編輯 .env.supabase
+# 注意：.env 與 .env.supabase 的 POSTGRES_PASSWORD 必須一致
+
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
 
 make up
 make init-minio
@@ -26,6 +31,7 @@ make ml-up
 ```bash
 make ps
 make health
+make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase
 ```
 
 ---

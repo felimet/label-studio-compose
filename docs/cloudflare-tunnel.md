@@ -38,15 +38,16 @@
 
 在 Tunnel 的 **Public Hostnames** 頁籤新增：
 
-| Subdomain | Domain | Service |
-|-----------|--------|---------|
-| `label-studio` | `example.com` | `http://nginx:80` |
-| `minio-api` | `example.com` | `http://minio:9000` |
-| `minio-console` | `example.com` | `http://minio:9001` |
-| `minio-admin` | `example.com` | `http://minio:9002` |
-| `supabase-studio` | `example.com` | `http://supabase-studio:3000` |
-| `supabase-meta` | `example.com` | `http://supabase-meta:8080` |
-| `redisinsight` | `example.com` | `http://redisinsight:5540` |
+| Subdomain | Domain | Service | Note |
+|-----------|--------|---------|------|
+| `label-studio` | `example.com` | `http://nginx:80` | - |
+| `minio-api` | `example.com` | `http://minio:9000` | 不建議對外開放，若開放可加 CF Access 規則 |
+| `minio-console` | `example.com` | `http://minio:9001` | - |
+| `minio-admin` | `example.com` | `http://minio:9002` | - |
+| `supabase-studio` | `example.com` | `http://supabase-studio:3000` | 建議加 CF Access 規則 |
+| `supabase-api` | `example.com` | `http://kong:8000` | - |
+| `supabase-meta` | `example.com` | `http://supabase-meta:8080` | 非常不建議對外開放 |
+| `redisinsight` | `example.com` | `http://redisinsight:5540` | 建議加 CF Access 規則 |
 
 > **先決條件（管理面路由）**：`minio-admin`、`supabase-studio`、`supabase-meta`、`redisinsight` 必須先完成 CF Access Policy 再建立 Public Hostname，避免管理面短暫裸露。
 

@@ -6,17 +6,23 @@
 ## 任務 1：核心服務首次啟動
 
 ### 目標
-在本機啟動 Label Studio + PostgreSQL + Redis + MinIO + Nginx，並通過健康檢查。
+在本機啟動 Label Studio + Supabase standalone（含 PostgreSQL）+ Redis + MinIO + Nginx，並通過健康檢查。
 
 ### 前置條件
 - 已安裝 Docker Engine 與 Docker Compose v2
 - 已建立 `.env`（從 `.env.example` 複製）
+- 已建立 `.env.supabase`（從 `.env.supabase.example` 複製）
+- `.env` 與 `.env.supabase` 的 `POSTGRES_PASSWORD` 必須一致
 - `LABEL_STUDIO_USER_TOKEN` 長度不超過 40 字元（建議 `openssl rand -hex 20`）
 
 ### 步驟
 ```bash
 cp .env.example .env
+cp .env.supabase.example .env.supabase
 # 編輯 .env，填入所有 <PLACEHOLDER>
+# 編輯 .env.supabase，填入所有 <PLACEHOLDER>
+
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
 
 make up
 make init-minio
@@ -24,8 +30,9 @@ make health
 ```
 
 ### 驗證
-- `make health` 全部服務為 healthy 或正常回應
+- `make health` 核心服務為 healthy 或正常回應
 - 可開啟 `http://localhost:18090`
+- `make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase` 無明顯錯誤
 
 ### 失敗回復
 - 查看即時日誌：`make logs`

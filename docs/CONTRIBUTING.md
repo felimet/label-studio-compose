@@ -62,6 +62,30 @@ make tools-up         # optional: RedisInsight local GUI
 make health
 ```
 
+### Direct `docker compose` (without Make)
+
+For contributors who run Compose manually, keep both protections:
+
+1. Interpolation: always set project name and explicit env files.
+2. Runtime: keep service-level `env_file` and `${VAR:?}` required checks.
+
+PowerShell example:
+
+```powershell
+$env:COMPOSE_PROJECT_NAME = "label-anything-sam"
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml config -q
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml up -d
+```
+
+Optional fallback when not passing `--env-file`:
+
+```powershell
+$env:COMPOSE_ENV_FILES = ".env,.env.supabase"
+docker compose -f docker-compose.supabase.yml config -q
+```
+
+`COMPOSE_ENV_FILES` is ignored if `--env-file` is provided.
+
 Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml)):
 
 <!-- AUTO-GENERATED from docker-compose.override.yml -->
