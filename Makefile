@@ -151,17 +151,17 @@ tools-logs:
 
 # ─── Initialisation ──────────────────────────────────────────
 init-minio:
-	docker compose run --rm minio-init
+	COMPOSE_PROJECT_NAME=$(STACK_PROJECT_NAME) docker compose run --rm minio-init
 
 create-admin:
-	@bash scripts/create-admin.sh
+	@COMPOSE_PROJECT_NAME=$(STACK_PROJECT_NAME) bash scripts/create-admin.sh
 
 reset-password:
-	@bash scripts/reset-password.sh
+	@COMPOSE_PROJECT_NAME=$(STACK_PROJECT_NAME) bash scripts/reset-password.sh
 
 # ─── Health check ────────────────────────────────────────────
 health:
-	@bash scripts/healthcheck.sh
+	@COMPOSE_PROJECT_NAME=$(STACK_PROJECT_NAME) bash scripts/healthcheck.sh
 
 # ─── Git ─────────────────────────────────────────────────────
 push:
