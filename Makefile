@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps \
+﻿.PHONY: up down restart logs ps \
         ml-up ml-down \
         up-sam3-image up-sam3-video \
         up-sam21-image up-sam21-video \
@@ -14,12 +14,6 @@
 	tools-up tools-down tools-logs \
         init-minio health create-admin reset-password \
         push
-
-# ─── Cross-platform file existence check (GNU make, no shell) ───────────────
-# Usage: $(call require_file, .env, cp .env.example .env)
-define require_file
-$(if $(wildcard $(1)),,$(error Missing $(1). Run: $(2)))
-endef
 
 # ─── Core stack ─────────────────────────────────────────────
 CORE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME)
@@ -85,7 +79,7 @@ build-sam3-image:
 	$(ML_COMPOSE) build sam3-image-backend
 
 build-sam3-video:
-	$(ML_COMPOSE) build sam3-video-backend
+	$(ML_COMPOSE) build sam3-video-craft
 
 build-sam21-image:
 	$(ML_COMPOSE) build sam21-image-backend
@@ -107,18 +101,18 @@ test-sam21-video:
 
 # ─── Supabase Management (default: standalone) ─────────────
 supabase-up:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,$(SUPABASE_STANDALONE_ENV),cp .env.supabase.example .env.supabase)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
 	$(SUPABASE_STANDALONE_COMPOSE) up -d
 
 supabase-down:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,$(SUPABASE_STANDALONE_ENV),cp .env.supabase.example .env.supabase)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
 	$(SUPABASE_STANDALONE_COMPOSE) down
 
 supabase-logs:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,$(SUPABASE_STANDALONE_ENV),cp .env.supabase.example .env.supabase)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
 	$(SUPABASE_STANDALONE_COMPOSE) logs -f --tail=100 studio meta db
 
 # Explicit aliases for standalone mode.
@@ -130,8 +124,8 @@ supabase-standalone-logs: supabase-logs
 
 # Supabase minimal example mode (studio + meta only).
 supabase-sample-up:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,$(SUPABASE_SAMPLE_ENV),cp .env.supabase.sample.template .env.supabase.sample)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_SAMPLE_ENV) || (echo "Missing $(SUPABASE_SAMPLE_ENV). Run: cp .env.supabase.sample.template .env.supabase.sample" && exit 1)
 	$(SUPABASE_SAMPLE_COMPOSE) up -d supabase-studio supabase-meta
 
 supabase-sample-down:
@@ -139,14 +133,14 @@ supabase-sample-down:
 	-$(SUPABASE_SAMPLE_COMPOSE) rm -f supabase-studio supabase-meta
 
 supabase-sample-logs:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,$(SUPABASE_SAMPLE_ENV),cp .env.supabase.sample.template .env.supabase.sample)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_SAMPLE_ENV) || (echo "Missing $(SUPABASE_SAMPLE_ENV). Run: cp .env.supabase.sample.template .env.supabase.sample" && exit 1)
 	$(SUPABASE_SAMPLE_COMPOSE) logs -f --tail=100 supabase-studio supabase-meta
 
 # ─── Developer Tools ─────────────────────────────────────────
 tools-up:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,.env.tools,cp .env.tools.example .env.tools)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f .env.tools || (echo "Missing .env.tools. Run: cp .env.tools.example .env.tools" && exit 1)
 	$(TOOLS_COMPOSE) up -d redisinsight
 
 tools-down:
@@ -154,8 +148,8 @@ tools-down:
 	-$(TOOLS_COMPOSE_BASE) rm -f redisinsight
 
 tools-logs:
-	$(call require_file,.env,cp .env.example .env)
-	$(call require_file,.env.tools,cp .env.tools.example .env.tools)
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f .env.tools || (echo "Missing .env.tools. Run: cp .env.tools.example .env.tools" && exit 1)
 	$(TOOLS_COMPOSE) logs -f --tail=100 redisinsight
 
 # ─── Initialisation ──────────────────────────────────────────
