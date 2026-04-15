@@ -388,19 +388,20 @@ services:
       STORAGE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
       REQUEST_ALLOW_X_FORWARDED_PATH: "true"
       FILE_SIZE_LIMIT: 52428800
-      STORAGE_BACKEND: file
+      # MinIO-backed S3 storage (adapted from supabase/docker-compose.s3.yml)
+      STORAGE_BACKEND: ${SUPABASE_STORAGE_BACKEND:-s3}
       # S3 bucket when using S3 backend, directory name when using 'file'
-      GLOBAL_S3_BUCKET: ${GLOBAL_S3_BUCKET}
+      GLOBAL_S3_BUCKET: ${MINIO_BUCKET:-default-bucket}
       # S3 Backend configuration
-      #GLOBAL_S3_ENDPOINT: https://your-s3-endpoint
-      #GLOBAL_S3_PROTOCOL: https
-      #GLOBAL_S3_FORCE_PATH_STYLE: "true"
-      #AWS_ACCESS_KEY_ID: your-access-key-id
-      #AWS_SECRET_ACCESS_KEY: your-secret-access-key
+      GLOBAL_S3_ENDPOINT: ${SUPABASE_STORAGE_S3_ENDPOINT:-http://minio:9000}
+      GLOBAL_S3_PROTOCOL: ${SUPABASE_STORAGE_S3_PROTOCOL:-http}
+      GLOBAL_S3_FORCE_PATH_STYLE: "${SUPABASE_STORAGE_S3_FORCE_PATH_STYLE:-true}"
+      AWS_ACCESS_KEY_ID: ${MINIO_LS_ACCESS_ID:?MINIO_LS_ACCESS_ID is required in .env}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_LS_SECRET_KEY:?MINIO_LS_SECRET_KEY is required in .env}
       FILE_STORAGE_BACKEND_PATH: /var/lib/storage
       TENANT_ID: ${STORAGE_TENANT_ID}
       # TODO: https://github.com/supabase/storage-api/issues/55
-      REGION: ${REGION}
+      REGION: ${SUPABASE_STORAGE_REGION:-ap-east-1}
       ENABLE_IMAGE_TRANSFORMATION: "true"
       IMGPROXY_URL: http://imgproxy:5001
       # S3 protocol endpoint configuration

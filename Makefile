@@ -39,7 +39,7 @@ ps:
 ML_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
 STACK_PROJECT_NAME ?= label-anything-sam
 SUPABASE_STANDALONE_ENV ?= .env.supabase
-SUPABASE_STANDALONE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) --env-file $(SUPABASE_STANDALONE_ENV) -f docker-compose.supabase.yml
+SUPABASE_STANDALONE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) --env-file .env --env-file $(SUPABASE_STANDALONE_ENV) -f docker-compose.supabase.yml
 SUPABASE_SAMPLE_ENV ?= .env.supabase.sample
 SUPABASE_SAMPLE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) --env-file .env --env-file $(SUPABASE_SAMPLE_ENV) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.sample.yml
 TOOLS_COMPOSE_BASE = docker compose --project-name $(STACK_PROJECT_NAME) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
@@ -101,14 +101,17 @@ test-sam21-video:
 
 # ─── Supabase Management (default: standalone) ─────────────
 supabase-up:
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
 	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
 	$(SUPABASE_STANDALONE_COMPOSE) up -d
 
 supabase-down:
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
 	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
 	$(SUPABASE_STANDALONE_COMPOSE) down
 
 supabase-logs:
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
 	@test -f $(SUPABASE_STANDALONE_ENV) || (echo "Missing $(SUPABASE_STANDALONE_ENV). Run: cp .env.supabase.example .env.supabase" && exit 1)
 	$(SUPABASE_STANDALONE_COMPOSE) logs -f --tail=100 studio meta db
 
