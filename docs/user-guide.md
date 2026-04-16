@@ -30,7 +30,7 @@ graph TD
     CF["Cloudflare Edge\n(WAF + Tunnel)"]
     Nginx["Nginx\n反向代理"]
     LS["Label Studio\n:8080"]
-    PG["PostgreSQL 17\n(標注資料)"]
+    PG["PostgreSQL 15.17\n(標注資料)"]
     Redis["Redis\n(任務佇列/快取)"]
     MinIO["MinIO S3\n(影像/影片儲存)"]
     SAMImg["sam3-image-backend\n:9090"]
@@ -120,8 +120,8 @@ flowchart TD
 #### MinIO 域名格式
 
 ```
-✓  MINIO_EXTERNAL_HOST=minio.example.com          # 只填域名
-✗  MINIO_EXTERNAL_HOST=https://minio.example.com  # 不含協定
+✓  MINIO_EXTERNAL_HOST=minio-api.example.com          # 只填域名
+✗  MINIO_EXTERNAL_HOST=https://minio-api.example.com  # 不含協定
 ```
 
 ### MinIO 帳號權限層級
@@ -248,7 +248,7 @@ flowchart TD
 
 ### 首次部署後修改管理員密碼
 
-`.env.example` 內的 `LABEL_STUDIO_PASSWORD` 為預設值，**部署完成後務必立即修改**：
+`.env.example` 內的 `LABEL_STUDIO_PASSWORD` 為模板值，**部署完成後務必立即修改**：
 
 ```bash
 make reset-password

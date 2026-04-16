@@ -1,9 +1,8 @@
-name: label-anything-sam
-
 # ============================================================
 # Local Development Override
 # Exposes ports directly; disables strict signup; enables CPU mode.
 # This file is auto-loaded by `docker compose up` alongside docker-compose.yml.
+# NOTE: keep `name:` only in base docker-compose.yml to avoid overlay conflicts.
 # ============================================================
 
 services:
@@ -11,7 +10,6 @@ services:
     ports:
       - "18086:8080"
     environment:
-      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
       - DJANGO_LOG_LEVEL=INFO
       - LOG_LEVEL=INFO
 
@@ -20,10 +18,6 @@ services:
       - "19000:9000"   # API (S3 endpoint)
       - "19001:9001"   # MinIO Console UI
       - "19002:9002"   # Full Admin UI (firstfinger/minio only; not via Cloudflare Tunnel)
-
-  pg-db:
-    ports:
-      - "5433:5432"   # Avoid conflict with local PostgreSQL
 
   redis:
     ports:

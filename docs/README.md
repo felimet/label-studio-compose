@@ -1,4 +1,4 @@
-# 文件入口（Documentation Hub）
+﻿# 文件入口（Documentation Hub）
 
 本頁是整份文件的導覽中樞。
 如果你是第一次接觸本專案，請先從這裡選擇角色與任務，再進入對應文件。
@@ -42,6 +42,6 @@
 
 當你修改以下內容時，請同步更新文件：
 
-- `.env.example` / `.env.ml.example` 變更：同步更新 [configuration.md](configuration.md) 與對應 cookbook。
+- `.env.example` / `.env.ml.example` / `.env.supabase.sample.template` / `.env.supabase.example` / `.env.tools.example` 變更：同步更新 [configuration.md](configuration.md) 與對應 cookbook。
 - Makefile 指令變更：同步更新三份 cookbook 與 [CONTRIBUTING.md](CONTRIBUTING.md)。
 - 新增服務或網路邊界：同步更新 [architecture.md](architecture.md) 與 [RUNBOOK.md](RUNBOOK.md)。

@@ -2,13 +2,18 @@ name: label-anything-sam
 
 # ============================================================
 # Label Studio — Full Stack
-# Services: PostgreSQL · Redis · MinIO · Label Studio · Nginx
+# Services: Supabase DB/Pooler · Redis · MinIO · Label Studio · Nginx
 # Cloudflare Tunnel routes:
 #   label-studio.example.com → nginx:80 → label-studio:8080
-#   minio-api.example.com        → minio:9000 (GET/HEAD WAF rule on CF)
-#   minio-console.example.com        → minio:9001 (GET/HEAD WAF rule on CF)
+#   minio-api.example.com     → minio:9000 (GET/HEAD WAF rule on CF)
+#   minio-console.example.com → minio:9001
+#   minio-admin.example.com   → minio:9002 (protect with CF Access)
+# Optional overlays:
+#   supabase-studio.example.com → supabase-studio:3000 (protect with CF Access)
+#   supabase-meta.example.com → supabase-meta:8080 (protect with CF Access)
+#   redisinsight.example.com  → redisinsight:5540 (protect with CF Access)
 # MinIO Admin UI (Full):
-#   http://localhost:19002       → minio:9002 (host-only; not via CF Tunnel)
+#   http://localhost:19002       → minio:9002 (host debug path; optional CF route above)
 #   Using firstfinger/minio — restores Admin Console removed from MinIO CE
 #   after 2025-05-24. See: https://github.com/Harsh-2002/MinIO
 # ============================================================
@@ -20,27 +25,6 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  # ── PostgreSQL ──────────────────────────────────────────────
-  pg-db:
-    image: "postgres:${POSTGRES_VERSION:-17}"
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-labelstudio}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-      - ./postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio} -d ${POSTGRES_DB:-labelstudio}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - internal
-
   # ── Redis ───────────────────────────────────────────────────
   redis:
     image: "redis:${REDIS_VERSION:-8.6.2}"
@@ -81,14 +65,14 @@ services:
       # MinIO Console listens on :9001 (replaces --console-address CLI flag)
       - MINIO_CONSOLE_ADDRESS=:9001
       # External domain — presigned URLs will use this base (S3 API)
-      - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
+      - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio-api.example.com}
       # Console external URL — must differ from MINIO_SERVER_URL.
       # Required for login to work behind a reverse proxy / Cloudflare Tunnel:
       # MinIO CSRF validation compares Origin against this value.
       - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_CONSOLE_HOST:-minio-console.example.com}
       # CORS — allow browser uploads via presigned URLs.
       # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
-      - MINIO_API_CORS_ALLOW_ORIGIN=*
+      - MINIO_API_CORS_ALLOW_ORIGIN=${MINIO_API_CORS_ALLOW_ORIGIN:-https://label-studio.example.com}
       # KMS master key for SSE-S3 bucket encryption (no external KES required).
       # Format: <key-name>:<base64-encoded-32-byte-key>
       # Generate: printf 'minio-sse-key:'; openssl rand -base64 32
@@ -120,6 +104,9 @@ services:
       # Set in .env; leave empty to skip service account provisioning (root credentials will be used).
       - MINIO_LS_ACCESS_ID=${MINIO_LS_ACCESS_ID:-}
       - MINIO_LS_SECRET_KEY=${MINIO_LS_SECRET_KEY:-}
+      # Optional: allow anonymous download policy on buckets created by minio-init.
+      # Recommended default is false (private buckets).
+      - MINIO_ANONYMOUS_DOWNLOAD=${MINIO_ANONYMOUS_DOWNLOAD:-false}
       # Optional bucket quota in GiB. Leave empty to disable.
       - MINIO_BUCKET_QUOTA_GB=${MINIO_BUCKET_QUOTA_GB:-}
     volumes:
@@ -134,8 +121,6 @@ services:
     restart: unless-stopped
     logging: *default-logging
     depends_on:
-      pg-db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -144,10 +129,11 @@ services:
     environment:
       # Database
       - DJANGO_DB=default
-      - POSTGRE_HOST=pg-db
-      - POSTGRE_PORT=5432
-      - POSTGRE_NAME=${POSTGRES_DB:-labelstudio}
-      - POSTGRE_USER=${POSTGRES_USER:-labelstudio}
+      # Default path: connect to Supabase standalone pooler via shared internal network.
+      - POSTGRE_HOST=${LS_POSTGRE_HOST:-supavisor}
+      - POSTGRE_PORT=${LS_POSTGRE_PORT:-5432}
+      - POSTGRE_NAME=${LS_POSTGRE_NAME:-postgres}
+      - POSTGRE_USER=${LS_POSTGRE_USER:-postgres}
       - POSTGRE_PASSWORD=${POSTGRES_PASSWORD}
       # Redis (task queue + caching)
       - REDIS_LOCATION=redis://:${REDIS_PASSWORD}@redis:6379/1
@@ -218,7 +204,13 @@ services:
   # ── Cloudflare Tunnel ────────────────────────────────────────
   # Routes configured in CF Zero Trust dashboard:
   #   label-studio.example.com → http://nginx:80
-  #   minio.example.com        → http://minio:9000
+  #   minio-api.example.com     → http://minio:9000
+  #   minio-console.example.com → http://minio:9001
+  #   minio-admin.example.com   → http://minio:9002
+  # Optional overlays:
+  #   supabase-studio.example.com → http://supabase-studio:3000
+  #   supabase-meta.example.com → http://supabase-meta:8080
+  #   redisinsight.example.com  → http://redisinsight:5540
   cloudflared:
     image: "cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.3.0}"
     restart: unless-stopped

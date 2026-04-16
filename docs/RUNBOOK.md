@@ -13,7 +13,7 @@ Operations reference for the Label Studio production stack.
 ## Health Checks
 
 ```bash
-make health          # full stack check (PostgreSQL · Redis · MinIO · LS · Nginx · SAM3)
+make health          # full stack check (Supabase db/supavisor · Redis · MinIO · LS · Nginx · SAM3)
 ```
 
 Individual service health endpoints:
@@ -34,13 +34,15 @@ Individual service health endpoints:
 
 ```bash
 cp .env.example .env
+cp .env.supabase.example .env.supabase
 # Fill in all <PLACEHOLDER> values — see docs/configuration.md
 # Generate secrets:
 openssl rand -hex 32    # LABEL_STUDIO_SECRET_KEY
 openssl rand -hex 20    # LABEL_STUDIO_USER_TOKEN  ← must be ≤40 chars; hex 32 (64 chars) breaks first-boot
 openssl rand -base64 24 # POSTGRES_PASSWORD, REDIS_PASSWORD, MINIO_ROOT_PASSWORD
 
-docker compose up -d
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+docker compose --project-name label-anything-sam up -d
 make init-minio         # create bucket + CORS (one-time)
 make health
 ```
@@ -48,20 +50,39 @@ make health
 ### Upgrade services
 
 ```bash
-# 1. Update version pins in .env (LABEL_STUDIO_VERSION, POSTGRES_VERSION, etc.)
+# 1. Update version pins in .env / docker-compose.supabase.yml (LABEL_STUDIO_VERSION, Supabase image tags, etc.)
 #    Note: MinIO uses firstfinger/minio:latest (no version pin) — docker compose pull
 #    will always fetch the latest daily build. To hold a specific build, change
 #    docker-compose.yml minio.image to "firstfinger/minio:<tag>".
 # 2. Pull new images
-docker compose pull
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml pull
 
 # 3. Rolling restart (LS → nginx → cloudflared)
-docker compose up -d --no-deps label-studio
-docker compose up -d --no-deps nginx
-docker compose up -d --no-deps cloudflared
+docker compose --project-name label-anything-sam up -d --no-deps label-studio
+docker compose --project-name label-anything-sam up -d --no-deps nginx
+docker compose --project-name label-anything-sam up -d --no-deps cloudflared
 
 # 4. Verify
 make health
+```
+
+> ⚠️ **Supabase PostgreSQL major version 變更不可直接沿用舊資料目錄。**
+>
+> 若 `docker-compose.supabase.yml` 中 `db` 的 PostgreSQL major 版本發生變動，不可直接重用既有 `./supabase-volumes/db/data`。請先做 SQL 備份，再以新版本重建資料庫並還原：
+>
+> 1. `docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db sh -lc 'pg_dump -U postgres "$POSTGRES_DB"' > backup.sql`
+> 2. 停止 stack，清空或替換 `./supabase-volumes/db/data`
+> 3. 以新版本啟動 `db`
+> 4. `cat backup.sql | docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db sh -lc 'psql -U postgres "$POSTGRES_DB"'`
+
+### Supabase 管理（standalone）
+
+本分支 Supabase 管理流程採用 standalone stack，不依賴 v1.1.0 cutover 指令。
+
+```bash
+cp .env.supabase.example .env.supabase
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase
 ```
 
 ### Start ML backends (GPU)
@@ -110,9 +131,9 @@ docker compose up -d --no-deps label-studio
 
 ```bash
 docker compose stop label-studio
-docker compose exec db psql -U labelstudio -c "DROP DATABASE labelstudio;"
-docker compose exec db psql -U labelstudio -c "CREATE DATABASE labelstudio;"
-docker compose exec -T db psql -U labelstudio labelstudio < backup.sql
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db sh -lc 'psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\";"'
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db sh -lc 'psql -U postgres -d postgres -c "CREATE DATABASE \"$POSTGRES_DB\";"'
+cat backup.sql | docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db sh -lc 'psql -U postgres "$POSTGRES_DB"'
 docker compose start label-studio
 ```
 
@@ -122,18 +143,18 @@ docker compose start label-studio
 
 ```bash
 # Check postgres health
-docker compose exec db pg_isready -U labelstudio
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db pg_isready -U postgres -h localhost
 
 # Inspect init log
-docker compose logs db | grep -i error
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml logs db | grep -i error
 ```
 
 If the database was never created, re-run init:
 ```bash
-docker compose down
-docker volume rm label-studio_postgres-data   # ⚠️ deletes all data
-docker compose up -d db
-docker compose logs -f db  # wait for "database system is ready"
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml down
+rm -rf ./supabase-volumes/db/data              # ⚠️ deletes all data
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml up -d db
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml logs -f db  # wait for "database system is ready"
 ```
 
 ### Label Studio 登入 403 CSRF verification failed
@@ -465,7 +486,8 @@ Label Studio typically takes 60–90 s to start on first boot.
 ```bash
 make logs                                     # all services, last 100 lines
 docker compose logs -f label-studio           # LS only
-docker compose logs -f db redis               # infra only
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml logs -f db supavisor  # db/pooler
+docker compose logs -f redis                  # core infra only
 
 # SAM3 backends
 docker compose -f docker-compose.yml -f docker-compose.ml.yml \
@@ -492,8 +514,8 @@ docker compose logs label-studio 2>&1 | jq 'select(.level=="ERROR")'
 # Label Studio 標注資料 + Local files
 tar -czf ls-data-$(date +%Y%m%d).tar.gz ./ls-data/
 
-# PostgreSQL — 必須用 pg_dump（postgres-data/ 是內部格式，直接複製無法還原）
-docker compose exec db pg_dump -U labelstudio labelstudio \
+# Supabase PostgreSQL — 必須用 pg_dump（supabase-volumes/db/data 是內部格式，直接複製無法還原）
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.yml -f docker-compose.supabase.yml exec -T db sh -lc 'pg_dump -U postgres "$POSTGRES_DB"' \
   > backup-$(date +%Y%m%d).sql
 
 # MinIO 媒體檔案

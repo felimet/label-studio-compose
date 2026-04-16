@@ -9,7 +9,7 @@
 #   environment: only sets static values (URL, paths, port).
 #
 # NOTE: No `name:` here — the base docker-compose.yml defines project name
-# `label-studio` and owns the `internal` network. Adding `name:` in an
+# `label-anything-sam` and owns the `internal` network. Adding `name:` in an
 # overlay overrides the project name and breaks network sharing.
 # ============================================================
 

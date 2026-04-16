@@ -1,4 +1,4 @@
-# Contributing Guide
+﻿# Contributing Guide
 
 > Audience: developers and contributors
 >
@@ -38,13 +38,53 @@ cp .env.example .env
 cp .env.ml.example .env.ml
 # Edit .env.ml — fill in LABEL_STUDIO_API_KEY and HF_TOKEN at minimum
 
+# Optional local tools (RedisInsight)
+cp .env.tools.example .env.tools
+
+# Supabase management (default in this branch)
+# Pairing: docker-compose.supabase.yml + .env.supabase
+cp .env.supabase.example .env.supabase
+# IMPORTANT: keep POSTGRES_PASSWORD in .env and .env.supabase the same.
+
+# Supabase minimal example mode for Label Studio integration (not in this branch runtime flow)
+# Pairing: docker-compose.supabase.sample.yml + .env.supabase.sample
+cp .env.supabase.sample.template .env.supabase.sample
+
+# Start Supabase standalone first (default Label Studio DB target uses supavisor)
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+
 # Start core stack (exposed on dev ports — see docker-compose.override.yml)
 make up
 make init-minio       # first time only
+make tools-up         # optional: RedisInsight local GUI
 
 # Verify
 make health
 ```
+
+### Direct `docker compose` (without Make)
+
+For contributors who run Compose manually, keep both protections:
+
+1. Interpolation: always set project name and explicit env files.
+2. Runtime: keep service-level `env_file` and `${VAR:?}` required checks.
+
+PowerShell example:
+
+```powershell
+$env:COMPOSE_PROJECT_NAME = "label-anything-sam"
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml config -q
+docker compose --project-name label-anything-sam --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml up -d
+```
+
+Optional fallback when not passing `--env-file`:
+
+```powershell
+$env:COMPOSE_ENV_FILES = ".env,.env.supabase"
+docker compose -f docker-compose.supabase.yml config -q
+```
+
+`COMPOSE_ENV_FILES` is ignored if `--env-file` is provided.
 
 Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml)):
 
@@ -56,10 +96,18 @@ Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml
 | minio API | 19000 | S3 endpoint (`aws s3`, SDK, presigned URL) |
 | minio console | 19001 | MinIO admin UI (`http://localhost:19001`) |
 | postgres | 5433 | Avoid conflict with local PostgreSQL |
-| redis | 6380 | Avoid conflict with local Redis |
+| redis | 16380 | Avoid conflict with local Redis |
 <!-- END AUTO-GENERATED -->
 
 > **Windows 注意**：8000–9000 附近的 port 常被 Hyper-V 保留；若 bind 失敗改用 18000+ 範圍。
+
+Optional example-mode ports:
+
+| Service | Host port | Notes |
+|---------|-----------|-------|
+| redisinsight | 127.0.0.1:15540 (default) | Redis GUI overlay (`make tools-up`) |
+| supabase-studio | 127.0.0.1:18091 (default) | Supabase Studio 管理 UI（僅示例模式） |
+| supabase-meta | 127.0.0.1:18087 (default) | Supabase Postgres Meta REST API（僅示例模式） |
 
 ## Available Commands
 
@@ -71,13 +119,25 @@ Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml
 | `make restart` | Restart all core services |
 | `make logs` | Follow logs (last 100 lines) |
 | `make ps` | Show container status |
-| `make ml-up` | Start core stack + SAM3 image + video backends (GPU required) |
-| `make ml-down` | Stop all services (core + SAM3) |
+| `make ml-up` | Start core stack + SAM3/SAM2.1 image/video backends (GPU required) |
+| `make ml-down` | Stop all services (core + ML overlays) |
+| `make tools-up` | Start RedisInsight local GUI overlay |
+| `make tools-down` | Stop RedisInsight local GUI overlay |
+| `make tools-logs` | Follow RedisInsight logs |
+| `make supabase-up SUPABASE_STANDALONE_ENV=...` | Start Supabase management stack (standalone default) |
+| `make supabase-down SUPABASE_STANDALONE_ENV=...` | Stop Supabase management stack |
+| `make supabase-logs SUPABASE_STANDALONE_ENV=...` | Follow logs for Supabase management stack |
+| `make supabase-standalone-up SUPABASE_STANDALONE_ENV=...` | Start Supabase standalone management stack (without native pg-db) |
+| `make supabase-standalone-down SUPABASE_STANDALONE_ENV=...` | Stop Supabase standalone management stack |
+| `make supabase-standalone-logs SUPABASE_STANDALONE_ENV=...` | Follow logs for Supabase standalone management stack |
+| `make supabase-sample-up SUPABASE_SAMPLE_ENV=...` | Start Supabase minimal example mode (supabase-studio + supabase-meta) |
+| `make supabase-sample-down` | Stop Supabase minimal example mode |
+| `make supabase-sample-logs SUPABASE_SAMPLE_ENV=...` | Follow logs for Supabase minimal example mode |
 | `make build-sam3-image` | Build SAM3 image backend Docker image |
 | `make build-sam3-video` | Build SAM3 video backend Docker image |
 | `make test-sam3-image` | Run pytest inside sam3-image-backend container |
 | `make test-sam3-video` | Run pytest inside sam3-video-backend container |
-| `make init-minio` | One-time: create S3 bucket + CORS policy (minio-init container) |
+| `make init-minio` | One-time: create S3 bucket + service account policy (minio-init container) |
 | `make create-admin` | Create Label Studio superuser (interactive) |
 | `make health` | Run full stack health check |
 | `make push` | git add -A + interactive commit + push origin main |
@@ -144,4 +204,7 @@ docs(architecture): update volume table for dual backends
 - [ ] Tests pass: `pytest ml-backends/sam3-image/tests ml-backends/sam3-video/tests`
 - [ ] `.env.example` updated if new core env vars added
 - [ ] `.env.ml.example` updated if new SAM3 env vars added
+- [ ] `.env.supabase.sample.template` updated if new Supabase example-mode env vars added
+- [ ] `.env.supabase.example` updated if new Supabase standalone stack env vars added
+- [ ] `.env.tools.example` updated if new local tools env vars added
 - [ ] `docs/configuration.md` updated if new env vars added

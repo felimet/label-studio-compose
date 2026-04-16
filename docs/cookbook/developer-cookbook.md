@@ -1,4 +1,4 @@
-# 開發者 Cookbook
+﻿# 開發者 Cookbook
 
 本文件面向開發者，目標是用最短路徑完成「改程式、驗證、提交」。
 規範與完整背景請搭配 [../CONTRIBUTING.md](../CONTRIBUTING.md)。
@@ -6,12 +6,17 @@
 ## 任務 1：啟動可開發環境
 
 ### 目標
-啟動核心服務與（可選）ML 後端，讓本機可直接開發與測試。
+啟動核心服務、Supabase standalone（預設 DB 路徑），以及（可選）ML 後端，讓本機可直接開發與測試。
 
 ### 步驟
 ```bash
 cp .env.example .env
+cp .env.supabase.example .env.supabase
 # 編輯 .env
+# 編輯 .env.supabase
+# 注意：.env 與 .env.supabase 的 POSTGRES_PASSWORD 必須一致
+
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
 
 make up
 make init-minio
@@ -26,6 +31,7 @@ make ml-up
 ```bash
 make ps
 make health
+make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase
 ```
 
 ---
@@ -74,7 +80,7 @@ make test-sam3-image
 調整 env 變數時，維持程式、範例檔、文件一致。
 
 ### 變更清單
-1. 更新 `.env.example` 或 `.env.ml.example`
+1. 更新 `.env.example` / `.env.ml.example` / `.env.supabase.sample.template` / `.env.supabase.example` / `.env.tools.example`
 2. 更新 [../configuration.md](../configuration.md) 對應段落
 3. 若操作流程受影響，更新對應 cookbook
 4. 若健康檢查或啟動路徑受影響，更新 [../RUNBOOK.md](../RUNBOOK.md)

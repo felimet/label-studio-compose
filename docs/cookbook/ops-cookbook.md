@@ -6,16 +6,18 @@
 ## 任務 1：每日健康巡檢
 
 ### 目標
-在 3 分鐘內確認核心服務與 ML 服務是否健康。
+在 3 分鐘內確認核心服務、ML 服務與 Supabase standalone 管理堆疊是否健康。
 
 ### 步驟
 ```bash
 make ps
 make health
+docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml ps
 ```
 
 ### 驗證
 - 核心服務狀態為 `Up` 或 `healthy`
+- Supabase 服務狀態為 `Up`（至少 `db`, `studio`, `meta`, `kong`, `supavisor`）
 - `minio-init` 一次性任務為 `Exited (0)` 視為正常
 
 ### 異常處理
@@ -33,13 +35,13 @@ make health
 1. 先備份（至少 PostgreSQL dump + MinIO 檔案備份）
 2. 拉取新映像
 ```bash
-docker compose pull
+docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} pull
 ```
 3. 逐步重啟關鍵服務
 ```bash
-docker compose up -d --no-deps label-studio
-docker compose up -d --no-deps nginx
-docker compose up -d --no-deps cloudflared
+docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} up -d --no-deps label-studio
+docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} up -d --no-deps nginx
+docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} up -d --no-deps cloudflared
 ```
 4. 驗證
 ```bash
@@ -52,7 +54,29 @@ make health
 
 ---
 
-## 任務 3：快速事故排查（高頻）
+## 任務 3：啟用 Supabase 管理（standalone）
+
+### 目標
+在不改動核心 Label Studio stack 的前提下，啟用 Supabase 管理介面。
+
+### 步驟
+```bash
+cp .env.supabase.example .env.supabase
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+```
+
+### 驗證
+- `make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase` 可看到 `studio` 與 `meta` 正常啟動
+- `docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml ps` 顯示 Supabase 管理服務維持 `Up`
+- 可正常進入 Supabase Studio 管理頁
+
+### 注意
+- `.env.supabase` 僅供 Supabase 管理 stack 使用，不混入核心 `.env`
+- 若調整 Supabase 對外路由，請同步更新 Cloudflare Tunnel 設定
+
+---
+
+## 任務 4：快速事故排查（高頻）
 
 ### 症狀 A：ML 後端 401 Unauthorized
 - 檢查 `.env.ml` 的 `LABEL_STUDIO_API_KEY` 是否為 Legacy Token
@@ -74,15 +98,16 @@ make health
 
 ---
 
-## 任務 4：備份與還原演練
+## 任務 5：備份與還原演練
 
 ### 目標
 建立可驗證的資料保全流程。
 
 ### 建議備份
 ```bash
-# PostgreSQL（建議每日）
-docker compose exec db pg_dump -U labelstudio labelstudio > backup-$(date +%Y%m%d).sql
+# Supabase standalone PostgreSQL（建議每日）
+# 使用容器內 POSTGRES_DB，避免手動替換資料庫名稱
+docker compose --project-name ${STACK_PROJECT_NAME:-label-anything-sam} --env-file .env --env-file .env.supabase -f docker-compose.supabase.yml exec -T db sh -lc 'pg_dump -U postgres "$POSTGRES_DB"' > backup-$(date +%Y%m%d).sql
 
 # Label Studio 檔案資料
 tar -czf ls-data-$(date +%Y%m%d).tar.gz ./ls-data/
@@ -92,12 +117,12 @@ tar -czf minio-data-$(date +%Y%m%d).tar.gz ./minio-data/
 ```
 
 ### 還原重點
-- PostgreSQL 要用 SQL dump 還原，不要直接複製 `postgres-data` 目錄
+- Supabase standalone PostgreSQL 要用 SQL dump 還原，不要直接複製 `supabase-volumes/db/data` 目錄
 - 還原後先跑 `make health`，再做抽樣任務驗證
 
 ---
 
-## 任務 5：服務回滾
+## 任務 6：服務回滾
 
 ### 目標
 當升級造成中斷時，快速回到可用版本。
