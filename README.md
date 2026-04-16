@@ -17,23 +17,24 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 - Security-first defaults for S3 access, token usage, and network exposure
 
 > [!NOTE]
-> Prefer native PostgreSQL for Label Studio data (no Supabase)?
+> Version guidance:
 >
-> - Use tag `v1.0.0` for the pre-Supabase baseline.
-> - This mode has fewer parameters and is suitable for personal use / quick startup.
-> - You can get `v1.0.0` in any of these ways:
+> - `main` and release `v1.1.1` include the SAM3 image Point Prompt fix:
+>   native SAM3 point embeddings are used first; tiny-box fallback is used only when runtime support is missing.
+> - If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.1` (hotfix line based on pre-Supabase baseline).
+> - You can get each line in any of these ways:
 >   1. Git checkout (recommended for local dev)
->   2. Download `Source code (zip)` from Release `v1.0.0`
->   3. Switch Branch/Tag to `v1.0.0` in GitHub UI
+>   2. Download `Source code (zip)` from the corresponding Release
+>   3. Switch Branch/Tag in GitHub UI
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.0.0 -b local-v1-native-pg
+> git checkout tags/v1.1.1 -b local-main-v1.1.1
+> # or
+> git checkout tags/v1.0.1 -b local-v1-native-pg
 > ```
 >
-> In `v1.0.0`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
->
-> If this feature branch is merged later, you can stay on `main` for latest defaults, or switch Branch/Tag to `v1.0.0` when you need the legacy native-PG mode.
+> In `v1.0.1`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
 
 ## Quick Start
 

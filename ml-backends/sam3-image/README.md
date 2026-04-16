@@ -52,6 +52,7 @@ Use `labeling_config.xml` as your project's labeling interface.
 | `SAM3_ENABLE_PCS` | `true` | Enable natural-language text prompts (PCS). Set `false` for geometry-only mode |
 | `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | Minimum detection score for text-prompt results (0–1) |
 | `SAM3_RETURN_ALL_MASKS` | `false` | Return all detected instances (`true`) or only the top-scored one (`false`) |
+| `SAM3_POINT_FALLBACK_HALF_SIZE` | `0.005` | Half-size of fallback tiny-box point prompt in normalized coordinates. Used only when native SAM3 point embeddings are unavailable in the runtime |
 | `GPU_IDLE_TIMEOUT_SECS` | `3600` | Seconds of inactivity before model is unloaded from VRAM (default: 1 hour). Set lower (e.g., `300`) to release GPU memory more aggressively |
 
 ## Predict Paths
@@ -61,10 +62,10 @@ Three paths, all routed through `Sam3Processor` (no SAM2 fallback):
 | Input | Path | Notes |
 |-------|------|-------|
 | TextArea only | Text-only PCS | `set_text_prompt()` → full-image detection, up to N masks. Image dimensions read from the loaded image (no geometric context required). |
-| TextArea + geometry | Mixed | `set_text_prompt()` then `add_geometric_prompt()` per box/point |
-| Geometry only | Geometric | `add_geometric_prompt()` per prompt; non-`Exclude` = `label=True`, `Exclude` = `label=False` |
+| TextArea + geometry | Mixed | `set_text_prompt()` + box prompts via `add_geometric_prompt()` + keypoint prompts via native point embeddings |
+| Geometry only | Geometric | box prompts via `add_geometric_prompt()`; keypoint prompts via native point embeddings |
 
-> **Point prompts**: `Sam3Processor` only accepts boxes, not points. Each KeyPoint is represented as a tiny box (±0.5% of image dims) with `label=True/False` for positive/negative.
+> **Point prompts**: backend now prefers native SAM3 point embeddings (`geometric_prompt.append_points`) for KeyPoint prompts. Only when the current sam3 runtime lacks this path, it falls back to tiny-box approximation controlled by `SAM3_POINT_FALLBACK_HALF_SIZE`.
 
 ## References
 

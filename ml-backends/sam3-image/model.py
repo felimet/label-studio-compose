@@ -44,7 +44,7 @@ try:
 except ImportError:
     _HAS_ACCELERATE: bool = False
 
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -109,6 +109,9 @@ ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("SAM3_CONFIDENCE_THRESHOLD", "0.5"))
 # Return all detected masks from text-prompt (False = top-1 by score)
 RETURN_ALL_MASKS: bool = os.getenv("SAM3_RETURN_ALL_MASKS", "false").lower() == "true"
+# Fallback when native point prompts are unavailable: half-size of point box (normalized).
+# Final box size is (2 * SAM3_POINT_FALLBACK_HALF_SIZE) in each dimension.
+POINT_FALLBACK_HALF_SIZE: float = float(os.getenv("SAM3_POINT_FALLBACK_HALF_SIZE", "0.005"))
 
 # ── CUDA optimisations ─────────────────────────────────────────────────────────
 # Deferred to _ensure_loaded() — after gunicorn fork — so CUDA is never
@@ -534,6 +537,75 @@ class NewModel(LabelStudioMLBase):
         from_name: str,
         to_name: str,
     ) -> ModelResponse:
+        def _add_point_prompt_or_fallback(
+            state_dict: dict,
+            px: float,
+            py: float,
+            is_positive: bool,
+        ) -> dict:
+            """Add point prompt using SAM3 point embeddings, fallback to box approximation.
+
+            Preferred path:
+              - ensure language features exist ("visual" if geo-only)
+              - append a normalized point into state["geometric_prompt"]
+              - run grounding forward pass
+
+            Fallback path:
+              - represent point as a tiny box and call add_geometric_prompt
+            """
+            cx = px / image_width
+            cy = py / image_height
+
+            try:
+                # Geometric-only prompts require the synthetic "visual" text token.
+                if "language_features" not in state_dict.get("backbone_out", {}):
+                    state_dict = _processor.set_text_prompt(prompt="visual", state=state_dict)  # type: ignore[attr-defined]
+
+                geom_prompt = state_dict.get("geometric_prompt")
+                can_append_points = (
+                    geom_prompt is not None
+                    and hasattr(geom_prompt, "append_points")
+                    and hasattr(_processor, "_forward_grounding")
+                )
+
+                if can_append_points:
+                    prompt_obj: Any = geom_prompt
+                    points = torch.tensor(
+                        [cx, cy],
+                        device=DEVICE,
+                        dtype=torch.float32,
+                    ).view(1, 1, 2)
+                    labels = torch.tensor(
+                        [1 if is_positive else 0],
+                        device=DEVICE,
+                        dtype=torch.long,
+                    ).view(1, 1)
+
+                    # Prompt uses seq-first, batch-second: [N, B, 2] / [N, B]
+                    prompt_obj.append_points(points=points, labels=labels)
+                    return _processor._forward_grounding(state_dict)  # type: ignore[attr-defined]
+
+            except Exception as point_err:
+                logger.warning(
+                    "Native point prompt failed, fallback to box approximation: %s",
+                    point_err,
+                )
+
+            # Fallback path for older/incompatible sam3 builds.
+            eps = max(1e-4, POINT_FALLBACK_HALF_SIZE)
+            logger.debug(
+                "Point fallback to tiny box: cx=%.4f cy=%.4f half=%.4f positive=%s",
+                cx,
+                cy,
+                eps,
+                is_positive,
+            )
+            return _processor.add_geometric_prompt(  # type: ignore[attr-defined]
+                box=[cx, cy, eps * 2.0, eps * 2.0],
+                label=is_positive,
+                state=state_dict,
+            )
+
         state = _processor.set_image(Image.fromarray(image))  # type: ignore[attr-defined]
 
         has_text = text_prompt is not None
@@ -558,17 +630,14 @@ class NewModel(LabelStudioMLBase):
                 box=[cx, cy, w, h], label=is_positive, state=state,
             )
 
-        # Points: Sam3Processor has no add_point_prompt() — represent each point
-        # as a tiny box (±0.5% of image dims) so foreground / background is preserved.
+        # Points: prefer native SAM3 point embeddings through geometric_prompt.append_points.
+        # If unavailable in a specific sam3 build, fallback to tiny box approximation.
         for (px, py), lbl in zip(point_coords, point_labels):
-            eps_x = 0.005
-            eps_y = 0.005
-            cx = px / image_width
-            cy = py / image_height
-            state = _processor.add_geometric_prompt(  # type: ignore[attr-defined]
-                box=[cx, cy, eps_x * 2, eps_y * 2],
-                label=bool(lbl),
-                state=state,
+            state = _add_point_prompt_or_fallback(
+                state_dict=state,
+                px=px,
+                py=py,
+                is_positive=bool(lbl),
             )
 
         masks_tensor  = state.get("masks")   # [N, 1, H, W] bool

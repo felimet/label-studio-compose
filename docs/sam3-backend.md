@@ -94,18 +94,20 @@ Settings → Labeling Interface → Code → 貼上 XML
 ### Predict 路徑
 
 <!-- AUTO-GENERATED from ml-backends/sam3-image/model.py -->
-**Last Updated:** 2026-04-07
+**Last Updated:** 2026-04-17
 
 三條路徑依序判斷，並可任意組合：
 
 | 路徑 | 觸發條件 | SAM3 呼叫 | 說明 |
 |------|----------|-----------|------|
-| **混合（優先）** | TextArea + 幾何提示（KeyPoint / Rectangle） | `set_text_prompt()` → `add_geometric_prompt()` | 文字概念約束 + 幾何定位，最精確 |
+| **混合（優先）** | TextArea + 幾何提示（KeyPoint / Rectangle） | `set_text_prompt()` →（Rectangle）`add_geometric_prompt()` /（KeyPoint）`append_points()` | 文字概念約束 + 幾何定位，最精確 |
 | **純文字（PCS）** | 只有 TextArea，無幾何提示 | `set_text_prompt()` | 回傳 N 個概念實例遮罩；影像尺寸從 PIL 推導 |
-| **純幾何** | 只有 KeyPoint / Rectangle，無 TextArea | `add_geometric_prompt()` 一或多次 | 模型自動補 `'visual'` 虛擬文字；等同 SAM2 行為 |
+| **純幾何** | 只有 KeyPoint / Rectangle，無 TextArea | （Rectangle）`add_geometric_prompt()` /（KeyPoint）`append_points()` | 模型自動補 `'visual'` 虛擬文字；等同 SAM2 行為 |
 | **SAM2 fallback** | `sam3` package 未安裝（import 失敗） | `SAM2ImagePredictor.predict()` | 文字提示記 WARNING 並被忽略；幾何提示仍可用 |
 
-> **Points 的限制**：`Sam3Processor.add_geometric_prompt()` 僅接受 box，不接受點。點提示以邊長 ±0.5% 影像尺寸的微小 box 代替（`eps_x = eps_y = 0.005`），正向/負向透過 `label=True/False` 傳遞。
+> **Point Prompt 行為（2026-04-17 起）**：影像後端優先使用 SAM3 原生 point embedding（`geometric_prompt.append_points()`）進行推論；僅在執行環境的 sam3 缺少該能力時，才退回 tiny box 近似。
+>
+> tiny box fallback 半邊長可由 `SAM3_POINT_FALLBACK_HALF_SIZE` 控制（預設 `0.005`，即約 1% × 1% box）。
 <!-- END AUTO-GENERATED -->
 
 
@@ -124,7 +126,8 @@ NewModel.predict()
     │    ├── torch.autocast(bfloat16) context 包裹
     │    ├── processor.set_image(PIL)
     │    ├── processor.set_text_prompt(prompt, state)          [有文字時]
-    │    └── processor.add_geometric_prompt(box, label, state) [有幾何時，可多次]
+    │    ├── rectangle → processor.add_geometric_prompt(box, label, state)
+    │    └── keypoint  → geometric_prompt.append_points(...)；若不支援則 fallback tiny box
     │         state["masks"] [N,1,H,W] bool → mask2rle() → BrushLabels
     │  ModelResponse { brushlabels[], rle }
     ▼

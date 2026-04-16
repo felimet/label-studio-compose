@@ -17,23 +17,24 @@ English version: [README.md](README.md)
 - 以安全為先的預設：S3 最小權限、Token 使用規範、對外暴露邊界
 
 > [!NOTE]
-> 若不使用 Supabase，想讓 Label Studio 以原生 PostgreSQL 管理資料：
+> 版本使用建議：
 >
-> - 請改用 `v1.0.0` tag（Supabase 導入前基線）。
-> - 該模式參數較少，適合個人使用與快速啟用。
-> - 取得 `v1.0.0` 可用以下方式：
+> - `main` 與 `v1.1.1` 已包含 SAM3 影像 Point Prompt 修正：
+>   優先使用 SAM3 原生 point embedding；僅在執行環境不支援時才退回 tiny-box fallback。
+> - 若不使用 Supabase、希望 Label Studio 使用原生 PostgreSQL，請使用 `v1.0.1`（基於 Supabase 導入前基線的 hotfix 線）。
+> - 取得版本可用以下方式：
 >   1. 用 git checkout（本機開發建議）
->   2. 到 Release `v1.0.0` 下載 `Source code (zip)`
->   3. 在 GitHub 介面把 Branch/Tag 切到 `v1.0.0`
+>   2. 到對應 Release 下載 `Source code (zip)`
+>   3. 在 GitHub 介面切換 Branch/Tag
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.0.0 -b local-v1-native-pg
+> git checkout tags/v1.1.1 -b local-main-v1.1.1
+> # 或
+> git checkout tags/v1.0.1 -b local-v1-native-pg
 > ```
 >
-> 在 `v1.0.0` 中，Label Studio 資料會儲存在原生 PostgreSQL（`pg-db`），不需要 `.env.supabase` 與 `make supabase-up`。
->
-> 若此功能分支後續合併進 `main`，可留在 `main` 使用最新預設；需要舊版原生 PG 模式時，再把 Branch/Tag 切回 `v1.0.0`。
+> 在 `v1.0.1` 中，Label Studio 資料會儲存在原生 PostgreSQL（`pg-db`），不需要 `.env.supabase` 與 `make supabase-up`。
 
 ## 快速開始
 
