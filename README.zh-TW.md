@@ -52,7 +52,7 @@ cp .env.supabase.example .env.supabase
 # LABEL_STUDIO_USER_TOKEN 必須 <= 40 字元（建議：openssl rand -hex 20）
 # 重要：.env 與 .env.supabase 的 POSTGRES_PASSWORD 必須相同
 
-make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+make supabase-up
 make up
 make init-minio
 

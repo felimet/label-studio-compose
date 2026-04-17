@@ -52,7 +52,7 @@ cp .env.supabase.example .env.supabase
 # LABEL_STUDIO_USER_TOKEN must be <= 40 chars (use: openssl rand -hex 20)
 # IMPORTANT: keep POSTGRES_PASSWORD in .env and .env.supabase the same
 
-make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+make supabase-up
 make up
 make init-minio
 
