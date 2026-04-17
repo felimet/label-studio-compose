@@ -84,30 +84,37 @@ Settings → Labeling Interface → Code → 貼上 XML
 
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
-| `<TextArea name="text_prompt">` | 文字提示 | PCS 自然語言提示（純 SAM3 功能） |
+| `<TextArea name="text_prompt">` | 純文字提示 | 純文字路徑：無幾何提示時走全圖 PCS；有幾何提示且 mixed 欄位為空時作為回退 |
+| `<TextArea name="text_prompt_mixed">` | 混合文字提示 | 混合模式優先欄位：Text+Box / Text+Point 時優先取此值；空則回退到 text_prompt |
 | `<KeyPointLabels smart="true">` | 點擊提示 | 任意標籤（非 Exclude）為正向點；Exclude/background 為負向點 |
 | `<RectangleLabels smart="true">` | 框選提示 | 任意標籤（非 Exclude）為正向框；Exclude 為負向框 |
 | `<BrushLabels smart="true">` | 輸出 | SAM3 遮罩（Label Studio RLE 格式）；**必須** `smart="true"` 否則前端不會觸發 predict |
+| `<TextArea name="confidence_threshold">` | 門檻覆蓋（選用） | 執行期覆蓋 `SAM3_CONFIDENCE_THRESHOLD`（0~1）；超出範圍自動夾回 |
+| `<Choices name="apply_threshold_globally">` | 門檻套用範圍（選用） | 勾選→所有 selection mode 套用門檻；未勾選→僅 threshold mode 套用 |
+| `<Choices name="selection_mode">` | 選擇模式（選用） | 覆蓋 `SAM3_MASK_SELECTION_MODE`：`adaptive`/`top1`/`topk`/`threshold`/`all` |
+| `<TextArea name="selection_topk_k">` | Top-K 數量（選用） | `topk`/`adaptive` 模式的候選數量；覆蓋 `SAM3_MAX_RETURNED_MASKS` |
 
 > 影像後端 `brushlabels` 會依 context 動態回填：優先採用使用者當前幾何提示標籤；若無幾何標籤則回退到 `<BrushLabels>` 第一個 label（再不行才 fallback `Object` 以維持相容）。
 
 ### Predict 路徑
 
 <!-- AUTO-GENERATED from ml-backends/sam3-image/model.py -->
-**Last Updated:** 2026-04-17
+**Last Updated:** 2026-04-17 (v1.1.2)
 
-三條路徑依序判斷，並可任意組合：
+推論路徑由 context 中提示類型動態決定，優先順序由上而下：
 
-| 路徑 | 觸發條件 | SAM3 呼叫 | 說明 |
-|------|----------|-----------|------|
-| **混合（優先）** | TextArea + 幾何提示（KeyPoint / Rectangle） | `set_text_prompt()` →（Rectangle）`add_geometric_prompt()` /（KeyPoint）`append_points()` | 文字概念約束 + 幾何定位，最精確 |
-| **純文字（PCS）** | 只有 TextArea，無幾何提示 | `set_text_prompt()` | 回傳 N 個概念實例遮罩；影像尺寸從 PIL 推導 |
-| **純幾何** | 只有 KeyPoint / Rectangle，無 TextArea | （Rectangle）`add_geometric_prompt()` /（KeyPoint）`append_points()` | 模型自動補 `'visual'` 虛擬文字；等同 SAM2 行為 |
-| **SAM2 fallback** | `sam3` package 未安裝（import 失敗） | `SAM2ImagePredictor.predict()` | 文字提示記 WARNING 並被忽略；幾何提示仍可用 |
+| 路徑 | 觸發條件 | 使用的文字提示 | SAM3 呼叫 | 說明 |
+|------|----------|--------------|-----------|------|
+| **混合（優先）** | text_prompt_mixed 或 text_prompt + 幾何提示（KeyPoint / Rectangle） | `mixed_text_prompt`（優先）或回退 `pure_text_prompt` | `set_text_prompt()` →（Rectangle）`add_geometric_prompt()` /（KeyPoint）`append_points()` | 文字概念約束 + 幾何定位，最精確 |
+| **純文字（PCS）** | 只有 text_prompt，無幾何提示 | `pure_text_prompt` | `set_text_prompt()` | 回傳 N 個概念實例遮罩；影像尺寸從 PIL 推導 |
+| **純幾何** | 只有 KeyPoint / Rectangle，無任何 TextArea | — | （Rectangle）`add_geometric_prompt()` /（KeyPoint）`append_points()` | 模型自動補 `'visual'` 虛擬文字；等同 SAM2 行為 |
+| **SAM2 fallback** | `sam3` package 未安裝（import 失敗） | 忽略 | `SAM2ImagePredictor.predict()` | 文字提示記 WARNING 並被忽略；幾何提示仍可用 |
 
-> **Point Prompt 行為（2026-04-17 起）**：影像後端優先使用 SAM3 原生 point embedding（`geometric_prompt.append_points()`）進行推論；僅在執行環境的 sam3 缺少該能力時，才退回 tiny box 近似。
+> **Point Prompt 行為**：影像後端優先使用 SAM3 原生 point embedding（`geometric_prompt.append_points()`）；僅在執行環境的 sam3 缺少該能力時退回 tiny box 近似（半邊長由 `SAM3_POINT_FALLBACK_HALF_SIZE` 控制，預設 `0.005`）。
 >
-> tiny box fallback 半邊長可由 `SAM3_POINT_FALLBACK_HALF_SIZE` 控制（預設 `0.005`，即約 1% × 1% box）。
+> **Mask Selection 行為**：推論結果由 `SAM3_MASK_SELECTION_MODE` 控制（`adaptive`/`top1`/`topk`/`threshold`/`all`），可在 UI 的 `selection_mode` Choices 控制項執行期覆蓋。`SAM3_CONFIDENCE_THRESHOLD` 門檻套用範圍由 `SAM3_APPLY_THRESHOLD_GLOBALLY` 控制；同樣可透過 `confidence_threshold` TextArea 執行期覆蓋。
+>
+> **Smart-trigger fallback**：若 Label Studio smart-trigger 在 `context.result` 中省略非幾何控制項，後端會從當前 annotation 結果中補回 TextArea / Choices 值（context 值優先，annotation 值僅補空缺）。
 <!-- END AUTO-GENERATED -->
 
 
@@ -115,20 +122,28 @@ Settings → Labeling Interface → Code → 貼上 XML
 
 ```
 Label Studio（點擊事件）
-    │  POST /predict  { task, context: {keypointlabels | rectanglelabels | textarea} }
+    │  POST /predict  { task, context: {keypointlabels | rectanglelabels | textarea | choices} }
     ▼
 NewModel.predict()
     ├── get_local_path()            ← 透過 LS SDK 下載影像（支援 local / S3 / MinIO）
-    ├── context 解析               ← textarea → text_prompt
-    │                                keypointlabels → (pixel x, y, is_positive)
-    │                                rectanglelabels → pixel xyxy box
+    ├── context 解析
+    │    ├── textarea[text_prompt]          → pure_text_prompt
+    │    ├── textarea[text_prompt_mixed]    → mixed_text_prompt（Text+Geo 優先欄位）
+    │    ├── textarea[confidence_threshold] → confidence_threshold override（0~1）
+    │    ├── choices[selection_mode]        → selection_mode override
+    │    ├── choices[apply_threshold_globally] → apply_threshold_globally override
+    │    ├── textarea[selection_topk_k]    → max_returned_masks override
+    │    ├── keypointlabels                 → (pixel x, y, is_positive)
+    │    └── rectanglelabels               → pixel xyxy box
+    │    （若 smart-trigger 省略非幾何欄位，從 annotation 結果補回）
     ├── _predict_sam3()
     │    ├── torch.autocast(bfloat16) context 包裹
     │    ├── processor.set_image(PIL)
     │    ├── processor.set_text_prompt(prompt, state)          [有文字時]
     │    ├── rectangle → processor.add_geometric_prompt(box, label, state)
-    │    └── keypoint  → geometric_prompt.append_points(...)；若不支援則 fallback tiny box
-    │         state["masks"] [N,1,H,W] bool → mask2rle() → BrushLabels
+    │    ├── keypoint  → geometric_prompt.append_points(...)；若不支援則 fallback tiny box
+    │    └── state["masks"] [N,1,H,W] + state["scores"] → mask selection（依 selection_mode）
+    │         → mask2rle() → BrushLabels
     │  ModelResponse { brushlabels[], rle }
     ▼
 Label Studio（渲染遮罩覆蓋層）
@@ -146,10 +161,11 @@ Settings → Labeling Interface → Code → 貼上 XML
 
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
-| `<TextArea name="text_prompt">` | 文字提示 | PCS 自然語言提示（純 SAM3 功能） |
+| `<TextArea name="text_prompt">` | 純文字提示 | 純文字路徑：無幾何提示時走全圖 PCS；mixed 欄位為空時作為回退 |
+| `<TextArea name="text_prompt_mixed">` | 混合文字提示 | Text+Box 混合模式優先欄位；空則回退到 text_prompt |
 | `<Labels name="videoLabels">` | 追蹤標籤 | 為追蹤物件指派語意標籤 |
-| `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框，SAM3 向前追蹤 |
-| `<KeyPointLabels name="kp" smart="true">` | 點擊提示 | 任意標籤（非 Exclude）或負向標籤（Exclude/background）點 |
+| `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框，SAM3 雙向追蹤 |
+| `<KeyPointLabels name="kp" smart="true">` | 點擊提示 | 任意標籤（非 Exclude）正向點；Exclude/background 負向點；原生 point_entries 傳入 |
 
 > 影片後端對缺少 label 的幾何提示，會從 labeling config 取預設標籤，避免結果與專案自訂標籤脫鉤。
 
@@ -163,34 +179,39 @@ NewModel.predict()
     ├── get_local_path()                      ← 下載影片
     ├── _get_geo_prompts()                    ← VideoRectangle sequence → [{type:"box", frame_idx, x_pct…}]
     │                                            KeyPointLabels → [{type:"point", frame_idx, x_pct, is_positive…}]
-    ├── _get_text_prompt()                    ← TextArea → str（可選）
+    ├── _get_text_prompt()                    ← TextArea → (mixed_text_prompt, pure_text_prompt)
+    │                                            推論模式判定：geo_only / text_only / text_geo / mixed_text_geo / none
     ├── _predict_sam3()
     │    ├── torch.autocast(bfloat16) context 包裹
-    │    ├── 幾何提示正規化                    ← 百分比轉 normalized xywh，並做 sanitize/clamp 到 [0,1]
+    │    ├── 提取雙向追蹤視窗                  ← [first_prompt_frame − MAX_FRAMES, last_prompt_frame + MAX_FRAMES]
+    │    │                                      MAX_FRAMES_TO_TRACK=0 → 提取整段影片
+    │    ├── 幾何提示正規化                    ← 百分比轉 normalized xywh/xy，sanitize/clamp 到 [0,1]
     │    │                                      非有限值（NaN/Inf）或完全離框提示會被略過
-    │    │                                      KeyPoint 轉 2%×2% tiny box（SAM3 視訊路徑僅吃 boxes）
-    │    ├── handle_request({ type: "start_session", resource_path: video_path })
+    │    │                                      Box → bounding_boxes；Point → point_entries（原生 point 支援）
+    │    ├── handle_request({ type: "start_session", resource_path: frame_dir })
     │    ├── handle_request({ type: "add_prompt",              ← 依畫格分組，每 obj_id 一次
     │    │        frame_index, obj_id,
-    │    │        bounding_boxes (normalized xywh),           ← box 與 point(轉 tiny box) 提示
-    │    │        bounding_box_labels,                        ← 1: 正向, 0: 負向
+    │    │        bounding_boxes (normalized xywh),           ← box 提示
+    │    │        point_coords / point_labels,                ← point 提示（原生）
     │    │        text? })                                    ← 文字提示（SAM3 only）
-    │    ├── handle_stream_request({ type: "propagate_in_video",
-    │    │        start_frame_index: last_frame,
-    │    │        max_frame_num_to_track: MAX_FRAMES_TO_TRACK })
-    │    │        → yields {frame_index, outputs: {out_binary_masks}}
+    │    ├── handle_stream_request({ type: "propagate_in_video", ... })
+    │    │        → yields {frame_index, obj_id, out_binary_mask}
     │    └── finally: handle_request({ type: "close_session" })    ← 必定執行
-    │    mask → _mask_to_bbox_pct() → VideoRectangle sequence（與 context sequence 合併）
-    │  ModelResponse { videorectangle: {sequence: [{frame, x, y, width, height, time}…]} }
+    │    mask → _mask_to_bbox_pct() → per-obj_id VideoRectangle sequence
+    │    已有 context sequence 與新 sequence 依 frame 排序合併（多物件各自維護）
+    │  ModelResponse { videorectangle[]: {id, labels, sequence: [{frame, x, y, w, h, time}…]} }
     ▼
-Label Studio（渲染多畫格追蹤框）
+Label Studio（渲染多畫格多物件追蹤框）
 ```
 
 ### 已知限制
 
 | 限制 | 說明 |
 |------|------|
-| 追蹤長度上限 | 最多 `MAX_FRAMES_TO_TRACK` 畫格（預設 10） |
+| 追蹤視窗 | 預設向前後各 `MAX_FRAMES_TO_TRACK` 畫格（預設 10）；設為 0 追蹤整段影片（OOM 風險） |
+| 雙向追蹤 | `SAM3_ENABLE_BIDIRECTIONAL_TRACKING=true`（預設）；設為 false 退回純前向追蹤 |
+| 多物件合併 | 新追蹤結果依 `obj_id` 與已有 context sequence 合併，同畫格依 frame 排序去重 |
+| KeyPoint（video） | 原生 point_entries 傳入 predictor；SAM3 multiplex video predictor 支援 native points（不再 tiny-box 轉換） |
 | Pascal / Volta GPU | sm_61 (GTX 1080) 在 image backend（sam3 main branch）實測可用；video backend（sam3.1）若推論時觸發 `addmm_act` kernel 缺失則失敗，改用 `sam3.pt` (sam3 main) 可解 |
 | Flash Attention 3 | 需 build-time `--build-arg ENABLE_FA3=true` 且設 `SAM3_ENABLE_FA3=true`；需 sm_90+（Hopper H100/H800） |
 | gunicorn `--preload` | **禁止使用**。`--preload` 在 master 程序載入 app，觸發 CUDA 初始化，fork 後所有 worker 失敗 |
@@ -293,9 +314,9 @@ cd ml-backends/sam3-video
 DEVICE=cpu python -m pytest tests/ --tb=short -v
 ```
 
-**影像後端測試涵蓋**：`Sam3Processor` mock、純文字 / 純幾何 / 混合三條路徑、SAM2 fallback（文字忽略）、box 正規化（normalized cxcywh）、`set_image` 呼叫、RLE roundtrip。
+**影像後端測試涵蓋**：`Sam3Processor` mock、純文字 / 純幾何 / 混合三條路徑、SAM2 fallback（文字忽略）、box 正規化（normalized cxcywh）、`set_image` 呼叫、RLE roundtrip；runtime 控制項解析（`confidence_threshold`、`selection_mode`、`apply_threshold_globally`、`selection_topk_k`）；`pure_text_prompt` vs `mixed_text_prompt` 路徑選擇；smart-trigger annotation fallback 補回邏輯。
 
-**影片後端測試涵蓋**：`_get_geo_prompts` / `_get_text_prompt` 解析、`handle_request` / `handle_stream_request` mock、session 生命週期（`close_session` 必定呼叫）、`_mask_to_bbox_pct`、SAM2 fallback propagation。
+**影片後端測試涵蓋**：`_get_geo_prompts` / `_get_text_prompt` 解析（含 `mixed_text_prompt` 回傳）、`handle_request` / `handle_stream_request` mock、session 生命週期（`close_session` 必定呼叫）、`_mask_to_bbox_pct`、SAM2 fallback propagation；雙向追蹤視窗計算（`extract_start` / `extract_end`）；多物件 `tracked_sequences` dict 結構；原生 point_entries 傳遞；inference_mode 分類標記。
 
 另含 prompt 正規化回歸測試：
 - `xywh` sanitize（越界 clamp、退化框最小尺寸、非有限值/完全離框丟棄）

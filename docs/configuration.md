@@ -238,9 +238,13 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
 | `SAM3_ENABLE_PCS` | `true` | 啟用自然語言文字提示（PCS）功能，支援純文字（text-only）與 text+geo mixed 兩種路徑。`false` = 幾何提示專用模式（影片後端退化為 SAM2 fallback 幾何模式） |
-| `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | 文字提示偵測的最低置信分數（`0`–`1`；越低偵測越多但可能有假陽性） |
-| `SAM3_RETURN_ALL_MASKS` | `false` | `true` = 回傳所有偵測實例；`false` = 只回傳得分最高的一個 |
-| `SAM3_POINT_FALLBACK_HALF_SIZE` | `0.005` | Point Prompt fallback tiny-box 半邊長（normalized）。後端優先使用 SAM3 原生 point embedding；僅在執行環境不支援時才使用此 fallback |
+| `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | 文字提示偵測的最低置信分數（`0`–`1`）。可由 UI `confidence_threshold` TextArea 執行期覆蓋 |
+| `SAM3_RETURN_ALL_MASKS` | `true` | `true` = 保留所有偵測實例交由 selection mode 過濾；`false` = 僅保留得分最高的一個（不建議，已由 `SAM3_MASK_SELECTION_MODE` 取代） |
+| `SAM3_MASK_SELECTION_MODE` | `all` | 推論候選選擇策略：`adaptive`（依提示型態自動選）/`top1`（最高分 1 個）/`topk`（前 K 名）/`threshold`（分數 ≥ 門檻）/`all`（全保留後依門檻過濾）。可由 UI `selection_mode` Choices 執行期覆蓋 |
+| `SAM3_MAX_RETURNED_MASKS` | `5` | `topk`/`adaptive` 模式的候選數量上限（≥ 1）。可由 UI `selection_topk_k` TextArea 執行期覆蓋 |
+| `SAM3_APPLY_THRESHOLD_GLOBALLY` | `true` | `true` = `SAM3_CONFIDENCE_THRESHOLD` 套用於所有 selection mode；`false` = 僅 `threshold` mode 套用。可由 UI `apply_threshold_globally` Choices 執行期覆蓋 |
+| `SAM3_POINT_FALLBACK_HALF_SIZE` | `0.005` | Point Prompt fallback tiny-box 半邊長（normalized）。影像後端優先使用 SAM3 原生 point embedding；僅在執行環境不支援時使用此 fallback |
+| `SAM3_ENABLE_BIDIRECTIONAL_TRACKING` | `true` | 影片後端：追蹤視窗同時向提示畫格的前後各延伸 `MAX_FRAMES_TO_TRACK` 畫格。`false` = 僅前向追蹤（退回 v1.1.1 行為） |
 
 ### Flash Attention 3 設定（影片後端）
 

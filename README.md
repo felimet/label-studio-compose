@@ -19,9 +19,11 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 > [!NOTE]
 > Version guidance:
 >
-> - `main` and release `v1.1.1` include the SAM3 image Point Prompt fix:
->   native SAM3 point embeddings are used first; tiny-box fallback is used only when runtime support is missing.
-> - If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.1` (hotfix line based on pre-Supabase baseline).
+> - `main` and release `v1.1.2` include all SAM3 fixes and enhancements:
+>   native point embeddings (image + video), mask selection modes (`adaptive`/`top1`/`topk`/`threshold`/`all`),
+>   runtime threshold and selection-mode UI overrides, bidirectional video tracking, multi-object track merging,
+>   and dual text-prompt fields (pure vs mixed-use).
+> - **If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.2` (hotfix line based on pre-Supabase baseline).**
 > - You can get each line in any of these ways:
 >   1. Git checkout (recommended for local dev)
 >   2. Download `Source code (zip)` from the corresponding Release
@@ -29,12 +31,12 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.1.1 -b local-main-v1.1.1
+> git checkout tags/v1.1.2 -b local-main-v1.1.2
 > # or
-> git checkout tags/v1.0.1 -b local-v1-native-pg
+> git checkout tags/v1.0.2 -b local-v1-native-pg
 > ```
 >
-> In `v1.0.1`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
+> In `v1.0.2`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
 
 ## Quick Start
 
@@ -204,6 +206,10 @@ Supabase mode boundaries:
 - `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`: Run ML backend tests
 - `make init-minio`: One-time bucket and service-account initialization
 - `make health`: End-to-end health checks
+
+## Label Studio Annotation UI (SAM3-image)
+
+![ann-ui](image/ann-ui.png)
 
 ## License
 

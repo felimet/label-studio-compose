@@ -3,11 +3,11 @@
   ======================================================
   推理模式（由幾何操作觸發）:
     Box-only  : 只框選 → SAM2 幾何分割（只分割框內物件）
-    Text+Box  : 文字 Submit → 再框選 → SAM3 PCS（找符合文字的類別，box 精確定位）
-    Text+Point: 文字 Submit → 再點選 → SAM3 PCS mixed mode
+    Text+Box  : 文字 + Add → 再框選 → SAM3 PCS（找符合文字的類別，box 精確定位）
+    Text+Point: 文字 + Add → 再點選 → SAM3 PCS mixed mode
     Point-only: 只點選 → SAM2 幾何分割
 
-  注意：文字 Submit 本身不觸發推理，只暫存文字供下一次幾何操作使用。
+  注意：文字 + Add 本身不觸發混合模式推理，只暫存文字供下一次幾何操作使用。
 
   Output:
     BrushLabels: SAM3/SAM2 返回的分割遮罩 (RLE 格式)
@@ -63,6 +63,15 @@
       color: #aaa;
       background: #1a1a1a;
     }
+    .sam3-inline-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .sam3-topk-k textarea {
+      max-width: 130px;
+    }
     /* Loading indicator while SAM3 is running */
     .lsf-main-content.lsf-requesting .sam3-hint span::after {
       content: " ⏳ Running SAM3…";
@@ -76,12 +85,23 @@
 
   <Image name="image" value="$image" zoom="true" zoomControl="true"/>
 
-  <!-- Optional: text prompt (Submit 暫存文字，不立即觸發推理) -->
+  <!-- Pure text prompt (保留既有純文字路徑) -->
   <View className="sam3-section">
-    <HyperText name="h_text" value="" className="sam3-label sam3-hint" inline="true">
-      <span title="輸入概念文字後按 Submit，立即觸發推理。&#10;&#10;純文字 → SAM3 全圖偵測所有符合描述的 instance。&#10;文字 + Box / Keypoint → Text+Geo mixed mode（更精確）。&#10;不輸入文字直接框選 → 純幾何模式。">Text Prompt (optional)</span>
+    <HyperText name="h_text_pure" value="" className="sam3-label" inline="true">
+      <span title="保留既有純文字提示欄位。&#10;&#10;輸入概念文字後按 + Add，系統會記住此提示。&#10;當沒有幾何提示時，走純文字推理路徑。&#10;若有幾何提示且 mixed 欄位為空，會回退使用 pure 欄位。">Text Prompt (pure text)</span>
     </HyperText>
     <TextArea name="text_prompt" toName="image"
+              placeholder="e.g. crack, spalling, rebar"
+              perRegion="false" rows="1"
+              maxSubmissions="1" showSubmitButton="true" editable="true"/>
+  </View>
+
+  <!-- Mixed-use text prompt (+ Add 暫存文字，不單獨觸發推理) -->
+  <View className="sam3-section">
+    <HyperText name="h_text_mixed" value="" className="sam3-label sam3-hint" inline="true">
+      <span title="輸入概念文字後按 + Add 只會暫存文字，不會單獨觸發推理。&#10;&#10;此欄位用於混合模式（Text+Box / Text+Keypoint），且優先於 pure 欄位。&#10;若 mixed 欄位留空才會回退使用 pure 欄位。&#10;若只輸入但未送出（未按 + Add），點擊物件通常會落回 geo_only。&#10;不輸入文字直接框選 → 純幾何模式。">Text Prompt (mixed use)</span>
+    </HyperText>
+    <TextArea name="text_prompt_mixed" toName="image"
               placeholder="e.g. crack, spalling, rebar"
               perRegion="false" rows="1"
               maxSubmissions="1" showSubmitButton="true" editable="true"/>
@@ -119,6 +139,42 @@
     </BrushLabels>
   </View>
 
+  <!-- Runtime confidence threshold override (optional) -->
+  <View className="sam3-section">
+    <HyperText name="h_threshold" value="" className="sam3-label sam3-hint" inline="true">
+      <span title="可選：覆蓋後端的 SAM3_CONFIDENCE_THRESHOLD。&#10;&#10;輸入 0~1 後按 + Add，下一次推理會使用此值。&#10;留空則使用環境變數設定。&#10;超出範圍會自動夾回 0~1。&#10;&#10;右側 checkbox (apply_threshold_globally) 可覆蓋門檻套用範圍：&#10;勾選 → 所有 selection mode 套用門檻。&#10;未勾選 → 僅 threshold 模式套用門檻。">Confidence Threshold (optional)</span>
+    </HyperText>
+    <View className="sam3-inline-row">
+      <Choices name="apply_threshold_globally" toName="image" choice="multiple" showInline="true">
+        <Choice value="apply_threshold_globally" selected="true"/>
+      </Choices>
+      <TextArea name="confidence_threshold" toName="image"
+                placeholder="e.g. 0.50 (range: 0~1)"
+                perRegion="false" rows="1"
+                maxSubmissions="1" showSubmitButton="true" editable="true"/>
+    </View>
+  </View>
+
+  <!-- Runtime selection mode override (optional) -->
+  <View className="sam3-section">
+    <HyperText name="h_selection_mode" value="" className="sam3-label sam3-hint" inline="true">
+      <span title="可選：覆蓋後端的 SAM3_MASK_SELECTION_MODE（勾選後立即生效於下一次推理）。&#10;&#10;模式操作說明：&#10;adaptive  → 系統依提示型態自動挑選候選數。&#10;top1      → 只回傳最高分 1 個候選。&#10;topk      → 回傳前 K 名候選（K 優先取右側 Top-K (k) 欄位；留空時用 SAM3_MAX_RETURNED_MASKS）。&#10;threshold → 只回傳分數 >= Confidence Threshold 的候選。&#10;all       → 先保留全部候選，再依門檻策略過濾。&#10;&#10;門檻策略由團隊設定決定：&#10;SAM3_APPLY_THRESHOLD_GLOBALLY=true  → 所有模式套用 Confidence Threshold。&#10;SAM3_APPLY_THRESHOLD_GLOBALLY=false → 僅 threshold 模式套用 Confidence Threshold。">Selection Mode (optional)</span>
+    </HyperText>
+    <View className="sam3-inline-row">
+      <Choices name="selection_mode" toName="image" choice="single" showInline="true">
+        <Choice value="adaptive"/>
+        <Choice value="top1"/>
+        <Choice value="topk"/>
+        <Choice value="threshold"/>
+        <Choice value="all" selected="true"/>
+      </Choices>
+      <TextArea name="selection_topk_k" toName="image" className="sam3-topk-k"
+                placeholder="Top-K (e.g. 5)"
+                perRegion="false" rows="1"
+                maxSubmissions="1" showSubmitButton="true" editable="true"/>
+    </View>
+  </View>
+  
   <!-- Inference scores: filled by ML backend after each prediction -->
   <View className="sam3-section sam3-scores">
     <HyperText name="h_scores" value="" className="sam3-label" inline="true">
