@@ -3,10 +3,10 @@
   ======================================================
   推理模式（由幾何操作觸發）:
     Box-only  : 只框選 → SAM3 video 追蹤
-    Text+Box  : 文字 Submit → 再框選 → SAM3 PCS mixed mode
+    Text+Box  : 文字 + Add → 再框選 → SAM3 PCS mixed mode
     Point-only: 只點選（Keypoint，若支援）→ SAM2 fallback 追蹤
 
-  注意：文字 Submit 本身不觸發推理，只暫存文字供下一次幾何操作使用。
+  注意：文字 + Add 本身不觸發混合模式推理，只暫存文字供下一次幾何操作使用。
 
   Output:
     VideoRectangle: SAM3 向前追蹤的逐格 bounding box
@@ -75,12 +75,23 @@
 
   <Video name="video" value="$video" framerate="25.0"/>
 
-  <!-- Optional: text prompt (Submit 暫存文字，不立即觸發推理) -->
+  <!-- Pure text prompt (保留既有純文字路徑) -->
   <View className="sam3-section">
-    <HyperText name="h_text" value="" className="sam3-label sam3-hint" inline="true">
-      <span title="輸入概念文字後按 Submit，立即觸發推理。&#10;&#10;純文字 → SAM3 全圖偵測並向前追蹤所有符合描述的 instance。&#10;文字 + Box Prompt → Text+Geo mixed mode（更精確定位）。&#10;不輸入文字直接框選 → 純幾何模式（SAM3 video）。">Text Prompt (optional)</span>
+    <HyperText name="h_text_pure" value="" className="sam3-label" inline="true">
+      <span title="保留既有純文字提示欄位。&#10;&#10;輸入概念文字後按 + Add，系統會記住此提示。&#10;當沒有幾何提示時，會走純文字推理路徑。">Text Prompt (pure text)</span>
     </HyperText>
     <TextArea name="text_prompt" toName="video"
+              placeholder="e.g. car, person, tree"
+              perRegion="false" rows="1"
+              maxSubmissions="1" showSubmitButton="true" editable="true"/>
+  </View>
+
+  <!-- Mixed-use text prompt (+ Add 暫存文字，不單獨觸發推理) -->
+  <View className="sam3-section">
+    <HyperText name="h_text_mixed" value="" className="sam3-label sam3-hint" inline="true">
+      <span title="輸入概念文字後按 + Add 只會暫存文字，不會單獨觸發推理。&#10;&#10;此欄位僅用於混合模式（Text+Box / Text+Keypoint）。&#10;下一次 Box / Keypoint 操作才會帶入文字執行。&#10;不輸入文字直接框選 → 純幾何模式（SAM3 video）。">Text Prompt (mixed use)</span>
+    </HyperText>
+    <TextArea name="text_prompt_mixed" toName="video"
               placeholder="e.g. car, person, tree"
               perRegion="false" rows="1"
               maxSubmissions="1" showSubmitButton="true" editable="true"/>

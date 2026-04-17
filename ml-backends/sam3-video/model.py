@@ -39,6 +39,7 @@ Predictor selection (auto-detected at startup via import availability)
 from __future__ import annotations
 
 import base64
+from collections import defaultdict
 import hashlib
 import logging
 import os
@@ -115,6 +116,11 @@ MAX_FRAMES_TO_TRACK: int = int(os.getenv("MAX_FRAMES_TO_TRACK", "10"))
 MAX_FRAME_LONG_SIDE: int = int(os.getenv("MAX_FRAME_LONG_SIDE", "1024"))
 
 ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
+# Track both temporal directions by default so prompt frames are not biased
+# toward forward-only propagation.
+ENABLE_BIDIRECTIONAL_TRACKING: bool = (
+    os.getenv("SAM3_ENABLE_BIDIRECTIONAL_TRACKING", "true").lower() == "true"
+)
 # Flash Attention 3 — only effective when sam3 package is installed
 ENABLE_FA3: bool = os.getenv("SAM3_ENABLE_FA3", "false").lower() == "true"
 
@@ -439,7 +445,30 @@ class NewModel(LabelStudioMLBase):
         # ── Parse prompts ──────────────────────────────────────────────────────
         default_track_label = self._resolve_default_track_label(from_name)
         geo_prompts = self._get_geo_prompts(context, default_track_label)
-        text_prompt = self._get_text_prompt(context)
+        mixed_text_prompt, pure_text_prompt = self._get_text_prompt(context)
+        has_geo_prompts = bool(geo_prompts)
+        has_box_geo_prompts = any(prompt.get("type") == "box" for prompt in geo_prompts)
+
+        if has_geo_prompts:
+            # Geo+text conditioning is only applied on box prompts in the current SAM3 path.
+            text_prompt = (
+                (mixed_text_prompt if mixed_text_prompt else pure_text_prompt)
+                if ENABLE_PCS and has_box_geo_prompts
+                else None
+            )
+        else:
+            text_prompt = pure_text_prompt if ENABLE_PCS else None
+
+        if has_geo_prompts and mixed_text_prompt and text_prompt == mixed_text_prompt:
+            inference_mode = "mixed_text_geo"
+        elif has_geo_prompts and text_prompt:
+            inference_mode = "text_geo"
+        elif has_geo_prompts:
+            inference_mode = "geo_only"
+        elif text_prompt:
+            inference_mode = "text_only"
+        else:
+            inference_mode = "none"
 
         if not geo_prompts and not text_prompt:
             return ModelResponse(predictions=[])
@@ -494,34 +523,54 @@ class NewModel(LabelStudioMLBase):
         # ── Dispatch to correct predictor path ─────────────────────────────────
         score_lines: list[str] = []
         try:
-            sequence, all_obj_ids, score_lines = self._predict_sam3(
+            tracked_sequences, score_lines = self._predict_sam3(
                 video_path, geo_prompts, text_prompt, fps,
             )
+            score_lines = [f"mode={inference_mode}", *score_lines] if score_lines else [f"mode={inference_mode}"]
         except Exception as exc:
             logger.error("Video predict failed: %s", exc, exc_info=True)
             return ModelResponse(predictions=[])
 
-        # ── Merge context sequence + new sequence ──────────────────────────────
-        context_sequence = vr_results[0]["value"].get("sequence", []) if vr_results else []
-        full_sequence    = context_sequence + sequence
+        existing_track_by_id: dict[str, dict] = {}
+        for vr_item in vr_results:
+            obj_key = str(vr_item.get("id", ""))
+            existing_track_by_id[obj_key] = {
+                "labels": (vr_item.get("value", {}).get("labels") or [default_track_label]),
+                "sequence": vr_item.get("value", {}).get("sequence", []),
+            }
 
         import uuid as _uuid
-        result_items: list[dict] = [{
-            "value": {
-                "framesCount": frames_count,
-                "duration":    duration,
-                "sequence":    full_sequence,
-            },
-            "from_name": from_name,
-            "to_name":   to_name,
-            "type":      "videorectangle",
-            "origin":    "manual",
-            "id":        list(all_obj_ids)[0] if all_obj_ids else "obj0",
-        }]
+        result_items: list[dict] = []
+
+        all_track_ids = sorted(set(existing_track_by_id) | set(tracked_sequences))
+        for track_id in all_track_ids:
+            existing = existing_track_by_id.get(track_id, {})
+            existing_seq = existing.get("sequence", [])
+            new_seq = tracked_sequences.get(track_id, [])
+            merged_seq = sorted(
+                existing_seq + new_seq,
+                key=lambda item: int(item.get("frame", 0)),
+            )
+            if not merged_seq:
+                continue
+
+            result_items.append({
+                "value": {
+                    "framesCount": frames_count,
+                    "duration": duration,
+                    "labels": existing.get("labels", [default_track_label]),
+                    "sequence": merged_seq,
+                },
+                "from_name": from_name,
+                "to_name": to_name,
+                "type": "videorectangle",
+                "origin": "manual",
+                "id": track_id,
+            })
 
         # Scores TextArea — filled after each prediction (read-only display)
         if score_lines:
-            logger.info("Inference scores:\n%s", "\n".join(score_lines))
+            logger.info("Inference scores (mode=%s):\n%s", inference_mode, "\n".join(score_lines))
         result_items.append({
             "id":        str(_uuid.uuid4())[:8],
             "from_name": "scores",
@@ -544,10 +593,10 @@ class NewModel(LabelStudioMLBase):
         geo_prompts: list[dict],
         text_prompt: Optional[str],
         fps: float,
-    ) -> tuple[list[dict], set[str], list[str]]:
+    ) -> tuple[dict[str, list[dict]], list[str]]:
         """Run SAM3 session-based video predictor.
 
-        Returns (sequence, all_obj_ids, score_lines).
+        Returns (tracked_sequences_by_obj_id, score_lines).
         """
         import gc
         if DEVICE == "cuda":
@@ -572,43 +621,55 @@ class NewModel(LabelStudioMLBase):
         geo_prompts: list[dict],
         text_prompt: Optional[str],
         fps: float,
-    ) -> tuple[list[dict], set[str], list[str]]:
-        all_obj_ids: set[str] = {p["obj_id"] for p in geo_prompts} or {"text_obj"}
+    ) -> tuple[dict[str, list[dict]], list[str]]:
+        all_obj_ids = sorted({str(p["obj_id"]) for p in geo_prompts})
+        if not all_obj_ids:
+            all_obj_ids = ["text_obj_0"]
         obj_id_map: dict[str, int] = {oid: i for i, oid in enumerate(all_obj_ids)}
+        reverse_obj_id_map: dict[int, str] = {v: k for k, v in obj_id_map.items()}
 
-        start_frame = min((p["frame_idx"] for p in geo_prompts), default=0)
-        last_frame  = max((p["frame_idx"] for p in geo_prompts), default=0)
+        first_prompt_frame = min((p["frame_idx"] for p in geo_prompts), default=0)
+        last_prompt_frame  = max((p["frame_idx"] for p in geo_prompts), default=0)
         score_lines: list[str] = []
 
         # ── Probe video dimensions ─────────────────────────────────────────
         cap = cv2.VideoCapture(video_path)
         vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
         if vid_w == 0 or vid_h == 0:
             logger.warning("Could not probe video dimensions for %s; boxes skipped.", video_path)
             vid_w = vid_h = 0
 
-        # ── Extract only needed frames to avoid OOM on long videos ─────────
-        # SAM3 start_session accepts an image folder (as well as a video file).
-        # Extracting only [start_frame, last_frame + MAX_FRAMES_TO_TRACK] avoids
-        # loading the entire video (e.g. 400+ frames × 1080p ≈ 2+ GB) into RAM.
-        frame_end = last_frame + MAX_FRAMES_TO_TRACK + 1
+        # ── Extract tracking window with backward context for bidirectional pass ──
+        if MAX_FRAMES_TO_TRACK > 0:
+            extract_start = max(0, first_prompt_frame - MAX_FRAMES_TO_TRACK)
+            extract_end = last_prompt_frame + MAX_FRAMES_TO_TRACK + 1
+            if total_frames > 0:
+                extract_end = min(extract_end, total_frames)
+        else:
+            extract_start = 0
+            extract_end = total_frames if total_frames > 0 else (last_prompt_frame + 1)
+        extract_end = max(extract_end, extract_start + 1)
 
         pred = _predictor
         assert pred is not None  # guaranteed by _ensure_loaded() above
 
         with tempfile.TemporaryDirectory() as frame_dir:
-            n_extracted = self._extract_frames(video_path, frame_dir, start_frame, frame_end)
+            n_extracted = self._extract_frames(video_path, frame_dir, extract_start, extract_end)
             if n_extracted == 0:
                 logger.error(
-                    "No frames extracted from %s [%d, %d)", video_path, start_frame, frame_end,
+                    "No frames extracted from %s [%d, %d)",
+                    video_path,
+                    extract_start,
+                    extract_end,
                 )
-                return [], all_obj_ids, score_lines
+                return {}, score_lines
 
             logger.info(
                 "Extracted %d frames [%d, %d) → %s (avoids loading full video)",
-                n_extracted, start_frame, frame_end, frame_dir,
+                n_extracted, extract_start, extract_end, frame_dir,
             )
 
             # Open session with image folder instead of full video file
@@ -625,31 +686,31 @@ class NewModel(LabelStudioMLBase):
                         "type":             "add_prompt",
                         "session_id":       session_id,
                         "frame_index":      0,
-                        "obj_id":           0,
+                        "obj_id":           obj_id_map["text_obj_0"],
                         "text":             text_prompt,
                         "clear_old_boxes":  True,
                         "clear_old_points": True,
                     })
 
                 # Group prompts by original frame_idx
-                from collections import defaultdict
                 prompts_by_frame: dict[int, list[dict]] = defaultdict(list)
                 for p in geo_prompts:
                     prompts_by_frame[p["frame_idx"]].append(p)
 
                 for orig_frame_idx in sorted(prompts_by_frame):
                     # Frame index relative to the extracted image folder
-                    rel_frame_idx = orig_frame_idx - start_frame
+                    rel_frame_idx = orig_frame_idx - extract_start
                     frame_prompts = prompts_by_frame[orig_frame_idx]
 
                     # ── Build per-object prompt buckets ────────────────────
-                    # box_entries: list of (xywh_normalized, is_positive)
-                    # SAM3 multiplex predictor accepts ONLY bounding boxes — no
-                    # point prompts. Keypoints are converted to tiny 2%×2% boxes.
-                    by_obj: dict[str, dict] = defaultdict(lambda: {"box_entries": []})
-                    box_obj_ids: list[str] = []
+                    # box_entries  : list[(xywh_normalized, is_positive)]
+                    # point_entries: list[(x_norm, y_norm, is_positive)]
+                    by_obj: dict[str, dict] = defaultdict(
+                        lambda: {"box_entries": [], "point_entries": []}
+                    )
 
                     for p in frame_prompts:
+                        prompt_obj_id = str(p["obj_id"])
                         if p["type"] == "box":
                             sanitized = self._sanitize_xywh_norm(
                                 p["x_pct"] / 100.0,
@@ -660,7 +721,7 @@ class NewModel(LabelStudioMLBase):
                             if sanitized is None:
                                 logger.debug(
                                     "Skip out-of-range box prompt: obj_id=%s frame=%d raw=(%.4f, %.4f, %.4f, %.4f)",
-                                    p["obj_id"],
+                                    prompt_obj_id,
                                     orig_frame_idx,
                                     p["x_pct"] / 100.0,
                                     p["y_pct"] / 100.0,
@@ -668,37 +729,26 @@ class NewModel(LabelStudioMLBase):
                                     p["h_pct"] / 100.0,
                                 )
                                 continue
-                            is_pos = p.get("is_positive", True)
-                            by_obj[p["obj_id"]]["box_entries"].append((sanitized, is_pos))
-                            if p["obj_id"] not in box_obj_ids:
-                                box_obj_ids.append(p["obj_id"])
-                        elif p["type"] == "point":
-                            # Convert to tiny normalized box (2%×2%) centred on the point.
-                            cx = p["x_pct"] / 100.0
-                            cy = p["y_pct"] / 100.0
                             is_pos = bool(p.get("is_positive", True))
-                            tiny_size = 0.02
-                            tiny_x = cx - tiny_size / 2.0
-                            tiny_y = cy - tiny_size / 2.0
-                            tiny = self._sanitize_xywh_norm(tiny_x, tiny_y, tiny_size, tiny_size)
-                            if tiny is None:
+                            by_obj[prompt_obj_id]["box_entries"].append((sanitized, is_pos))
+                        elif p["type"] == "point":
+                            x_norm = float(p.get("x_pct", 0.0)) / 100.0
+                            y_norm = float(p.get("y_pct", 0.0)) / 100.0
+                            if not np.isfinite(x_norm) or not np.isfinite(y_norm):
                                 continue
-                            # Negative (background) points → attach to all box-defined
-                            # objects; if none exist, attach to own obj_id.
-                            if is_pos:
-                                by_obj[p["obj_id"]]["box_entries"].append((tiny, True))
-                            else:
-                                targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
-                                for oid in targets:
-                                    by_obj[oid]["box_entries"].append((tiny, False))
+                            x_norm = float(np.clip(x_norm, 0.0, 1.0))
+                            y_norm = float(np.clip(y_norm, 0.0, 1.0))
+                            is_pos = bool(p.get("is_positive", True))
+                            by_obj[prompt_obj_id]["point_entries"].append((x_norm, y_norm, is_pos))
 
                     if not by_obj:
                         if text_prompt and ENABLE_PCS and frame_prompts:
+                            fallback_obj_id = str(frame_prompts[0]["obj_id"])
                             pred.handle_request({
                                 "type":             "add_prompt",
                                 "session_id":       session_id,
                                 "frame_index":      rel_frame_idx,
-                                "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
+                                "obj_id":           obj_id_map[fallback_obj_id],
                                 "text":             text_prompt,
                                 "clear_old_boxes":  True,
                                 "clear_old_points": True,
@@ -706,73 +756,180 @@ class NewModel(LabelStudioMLBase):
                         continue
 
                     for obj_id, data in by_obj.items():
+                        numeric_obj_id = obj_id_map[obj_id]
+                        box_entries = data["box_entries"]
+                        point_entries = data["point_entries"]
+
+                        if box_entries:
+                            box_req: dict = {
+                                "type": "add_prompt",
+                                "session_id": session_id,
+                                "frame_index": rel_frame_idx,
+                                "obj_id": numeric_obj_id,
+                                "clear_old_boxes": True,
+                                "clear_old_points": False,
+                                "bounding_boxes": [b for b, _ in box_entries],
+                                "bounding_box_labels": [1 if p else 0 for _, p in box_entries],
+                            }
+                            if text_prompt and ENABLE_PCS:
+                                box_req["text"] = text_prompt
+                            box_resp = pred.handle_request(box_req)
+                            if box_resp:
+                                has_positive = any(is_positive for _, is_positive in box_entries)
+                                has_negative = any((not is_positive) for _, is_positive in box_entries)
+                                prompt_type = "[MixedBox]" if has_positive and has_negative else (
+                                    "[ObjectBox]" if has_positive else "[ExcludeBox]"
+                                )
+                                logger.info(
+                                    "add_prompt box (frame=%d→rel=%d obj=%d type=%s): %s",
+                                    orig_frame_idx,
+                                    rel_frame_idx,
+                                    numeric_obj_id,
+                                    prompt_type,
+                                    box_resp,
+                                )
+                                score_lines.append(
+                                    f"frame={orig_frame_idx} obj={numeric_obj_id} {prompt_type}: {box_resp}"
+                                )
+
+                        if not point_entries:
+                            continue
+
                         req: dict = {
-                            "type":             "add_prompt",
-                            "session_id":       session_id,
-                            "frame_index":      rel_frame_idx,
-                            "obj_id":           obj_id_map[obj_id],
-                            "clear_old_boxes":  True,
+                            "type": "add_prompt",
+                            "session_id": session_id,
+                            "frame_index": rel_frame_idx,
+                            "obj_id": numeric_obj_id,
+                            "clear_old_boxes": False,
                             "clear_old_points": True,
+                            "points": [[x, y] for x, y, _ in point_entries],
+                            "point_labels": [1 if p else 0 for _, _, p in point_entries],
                         }
-                        if text_prompt and ENABLE_PCS:
-                            req["text"] = text_prompt
-                        entries = data["box_entries"]
-                        if entries:
-                            req["bounding_boxes"]      = [b for b, _ in entries]
-                            req["bounding_box_labels"] = [1 if p else 0 for _, p in entries]
-                        add_resp = pred.handle_request(req)
-                        if add_resp:
-                            has_positive = any(is_positive for _, is_positive in entries)
-                            has_negative = any((not is_positive) for _, is_positive in entries)
-                            prompt_type = "[Mixed]" if has_positive and has_negative else (
-                                "[Object]" if has_positive else "[Exclude]"
-                            )
-                            logger.info(
-                                "add_prompt (frame=%d→rel=%d obj=%d type=%s): %s",
-                                orig_frame_idx, rel_frame_idx,
-                                obj_id_map[obj_id], prompt_type, add_resp,
+                        try:
+                            add_resp = pred.handle_request(req)
+                            if add_resp:
+                                has_positive = any(is_positive for _, _, is_positive in point_entries)
+                                has_negative = any((not is_positive) for _, _, is_positive in point_entries)
+                                prompt_type = "[MixedPoint]" if has_positive and has_negative else (
+                                    "[ObjectPoint]" if has_positive else "[ExcludePoint]"
+                                )
+                                logger.info(
+                                    "add_prompt point (frame=%d→rel=%d obj=%d type=%s): %s",
+                                    orig_frame_idx,
+                                    rel_frame_idx,
+                                    numeric_obj_id,
+                                    prompt_type,
+                                    add_resp,
+                                )
+                                score_lines.append(
+                                    f"frame={orig_frame_idx} obj={numeric_obj_id} {prompt_type}: {add_resp}"
+                                )
+                        except Exception as point_error:
+                            logger.warning(
+                                "Point prompt rejected (frame=%d obj=%d): %s",
+                                orig_frame_idx,
+                                numeric_obj_id,
+                                point_error,
                             )
                             score_lines.append(
-                                f"frame={orig_frame_idx} obj={obj_id_map[obj_id]} "
-                                f"{prompt_type}: {add_resp}"
+                                f"frame={orig_frame_idx} obj={numeric_obj_id} [PointUnsupported]: {point_error}"
                             )
 
-                rel_last_frame = last_frame - start_frame
-                sequence: list[dict] = []
+                sequence_by_obj: dict[str, list[dict]] = defaultdict(list)
+                emitted_key: set[tuple[str, int]] = set()
 
-                try:
-                    for frame_data in pred.handle_stream_request({
-                        "type":                   "propagate_in_video",
-                        "session_id":             session_id,
-                        "propagation_direction":  "forward",
-                        "start_frame_index":      rel_last_frame,
-                        "max_frame_num_to_track": MAX_FRAMES_TO_TRACK,
-                    }):
+                def _consume_stream(req: dict) -> None:
+                    for frame_data in pred.handle_stream_request(req):
                         if frame_data is None:
                             continue
-                        rel_idx: int   = frame_data["frame_index"]
-                        outputs: dict  = frame_data.get("outputs") or {}
-                        binary_masks: np.ndarray = outputs.get("out_binary_masks", np.array([]))
+                        rel_idx = int(frame_data.get("frame_index", 0))
+                        outputs = frame_data.get("outputs") or {}
+                        binary_masks = np.asarray(outputs.get("out_binary_masks", np.array([])))
+                        out_obj_ids = outputs.get("out_obj_ids")
+                        if out_obj_ids is None:
+                            obj_ids_list = list(range(len(binary_masks)))
+                        else:
+                            obj_ids_list = list(np.asarray(out_obj_ids).tolist())
 
-                        abs_frame = rel_idx + start_frame
-                        for mask in binary_masks:
-                            bbox = self._mask_to_bbox_pct(mask)
-                            if bbox:
-                                sequence.append({
-                                    "frame":    abs_frame + 1,  # LS is 1-indexed
-                                    "x":        bbox["x"],
-                                    "y":        bbox["y"],
-                                    "width":    bbox["width"],
-                                    "height":   bbox["height"],
-                                    "enabled":  True,
-                                    "rotation": 0,
-                                    "time":     rel_idx / fps,
-                                })
+                        pair_count = min(len(binary_masks), len(obj_ids_list))
+                        abs_frame = rel_idx + extract_start
+
+                        for idx in range(pair_count):
+                            bbox = self._mask_to_bbox_pct(binary_masks[idx])
+                            if not bbox:
+                                continue
+
+                            try:
+                                numeric_obj_id = int(obj_ids_list[idx])
+                            except Exception:
+                                numeric_obj_id = idx
+
+                            ls_obj_id = reverse_obj_id_map.get(numeric_obj_id)
+                            if ls_obj_id is None:
+                                ls_obj_id = f"sam3_obj_{numeric_obj_id}"
+                                reverse_obj_id_map[numeric_obj_id] = ls_obj_id
+
+                            frame_no = abs_frame + 1
+                            dedupe_key = (ls_obj_id, frame_no)
+                            if dedupe_key in emitted_key:
+                                continue
+                            emitted_key.add(dedupe_key)
+
+                            sequence_by_obj[ls_obj_id].append({
+                                "frame": frame_no,
+                                "x": bbox["x"],
+                                "y": bbox["y"],
+                                "width": bbox["width"],
+                                "height": bbox["height"],
+                                "enabled": True,
+                                "rotation": 0,
+                                "time": float(abs_frame) / fps,
+                            })
+
+                anchor_frames = [p["frame_idx"] for p in geo_prompts] or [extract_start]
+                rel_anchor_min = max(min(anchor_frames) - extract_start, 0)
+                rel_anchor_max = max(max(anchor_frames) - extract_start, 0)
+
+                track_span = n_extracted
+                forward_req = {
+                    "type": "propagate_in_video",
+                    "session_id": session_id,
+                    "propagation_direction": "forward",
+                    "start_frame_index": rel_anchor_min,
+                    "max_frame_num_to_track": track_span,
+                }
+                try:
+                    _consume_stream(forward_req)
+                except Exception as forward_err:
+                    logger.warning(
+                        "forward propagate_in_video raised an error: %s",
+                        forward_err,
+                    )
+
+                try:
+                    if ENABLE_BIDIRECTIONAL_TRACKING:
+                        reverse_req = {
+                            "type": "propagate_in_video",
+                            "session_id": session_id,
+                            "propagation_direction": "reverse",
+                            "start_frame_index": rel_anchor_max,
+                            "max_frame_num_to_track": track_span,
+                        }
+                        try:
+                            _consume_stream(reverse_req)
+                        except Exception:
+                            reverse_req["propagation_direction"] = "backward"
+                            _consume_stream(reverse_req)
                 except Exception as _prop_err:
                     logger.warning(
                         "propagate_in_video raised an error (no detections or SAM3 internal): %s",
                         _prop_err,
                     )
+
+                tracked_sequences = {
+                    obj_id: sorted(seq, key=lambda item: int(item.get("frame", 0)))
+                    for obj_id, seq in sequence_by_obj.items()
+                }
             finally:
                 pred.handle_request({
                     "type":       "close_session",
@@ -780,7 +937,7 @@ class NewModel(LabelStudioMLBase):
                 })
             # TemporaryDirectory cleaned up here (after close_session)
 
-        return sequence, all_obj_ids, score_lines
+        return tracked_sequences, score_lines
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -795,65 +952,109 @@ class NewModel(LabelStudioMLBase):
             default_label = self._resolve_default_track_label("")
 
         prompts: list[dict] = []
+        frame_to_tracks: dict[int, list[str]] = defaultdict(list)
+
         for item in context.get("result", []):
-            item_type = item.get("type")
+            if item.get("type") != "videorectangle":
+                continue
 
-            if item_type == "videorectangle":
-                obj_id = item["id"]
-                # Label applied to the whole tracking object (not per-frame sequence).
-                # "Exclude" → negative prompt (bounding_box_labels=0).
-                label_name  = (item["value"].get("labels") or [default_label])[0]
-                is_positive = label_name.lower() != "exclude"
-                for seq in item["value"].get("sequence", []):
-                    if not seq.get("enabled", True):
-                        continue
-                    frame_idx = max(seq.get("frame", 1) - 1, 0)  # LS 1-indexed → 0-indexed
-                    prompts.append({
-                        "type":        "box",
-                        "obj_id":      obj_id,
-                        "frame_idx":   frame_idx,
-                        "x_pct":       seq.get("x",      0.0),
-                        "y_pct":       seq.get("y",      0.0),
-                        "w_pct":       seq.get("width",  0.0),
-                        "h_pct":       seq.get("height", 0.0),
-                        "is_positive": is_positive,
-                    })
+            obj_id = str(item.get("id", ""))
+            # Label applied to the whole tracking object (not per-frame sequence).
+            # "Exclude" → negative prompt (bounding_box_labels=0).
+            label_name = (item.get("value", {}).get("labels") or [default_label])[0]
+            is_positive = str(label_name).lower() != "exclude"
 
-            elif item_type == "keypointlabels":
-                obj_id     = item["id"]
-                val        = item["value"]
-                # LS sends frame as 1-indexed for video controls; default to frame 1
-                frame_idx  = max(val.get("frame", 1) - 1, 0)
-                label_name = (val.get("keypointlabels") or [default_label])[0]
-                is_positive = int(
-                    item.get("is_positive", 0 if label_name.lower() == "background" else 1)
-                )
+            for seq in item.get("value", {}).get("sequence", []):
+                if not seq.get("enabled", True):
+                    continue
+                frame_idx = max(int(seq.get("frame", 1)) - 1, 0)  # LS 1-indexed → 0-indexed
+                frame_to_tracks[frame_idx].append(obj_id)
                 prompts.append({
-                    "type":        "point",
-                    "obj_id":      obj_id,
-                    "frame_idx":   frame_idx,
-                    "x_pct":       val.get("x", 0.0),
-                    "y_pct":       val.get("y", 0.0),
+                    "type": "box",
+                    "obj_id": obj_id,
+                    "frame_idx": frame_idx,
+                    "x_pct": seq.get("x", 0.0),
+                    "y_pct": seq.get("y", 0.0),
+                    "w_pct": seq.get("width", 0.0),
+                    "h_pct": seq.get("height", 0.0),
                     "is_positive": is_positive,
-                    "label_name":  label_name,
                 })
+
+        for item in context.get("result", []):
+            if item.get("type") != "keypointlabels":
+                continue
+
+            val = item.get("value", {})
+            frame_idx = max(int(val.get("frame", 1)) - 1, 0)
+            label_name = (val.get("keypointlabels") or [default_label])[0]
+            is_positive = int(item.get("is_positive", 0 if str(label_name).lower() == "background" else 1))
+
+            linked_obj_id: Optional[str] = None
+            for parent_key in ("parentID", "parent_id", "object_id"):
+                parent_id = item.get(parent_key)
+                if parent_id:
+                    linked_obj_id = str(parent_id)
+                    break
+
+            if linked_obj_id is None:
+                frame_tracks = frame_to_tracks.get(frame_idx, [])
+                if len(frame_tracks) == 1:
+                    # LS keypoint region id often differs from videorectangle id.
+                    # If only one track exists on this frame, attach the point to it.
+                    linked_obj_id = frame_tracks[0]
+
+            if linked_obj_id is None:
+                linked_obj_id = str(item.get("id", "kp"))
+
+            prompts.append({
+                "type": "point",
+                "obj_id": linked_obj_id,
+                "frame_idx": frame_idx,
+                "x_pct": val.get("x", 0.0),
+                "y_pct": val.get("y", 0.0),
+                "is_positive": is_positive,
+                "label_name": label_name,
+            })
 
         return sorted(prompts, key=lambda p: p["frame_idx"])
 
-    def _get_text_prompt(self, context: dict) -> Optional[str]:
+    def _get_text_prompt(self, context: dict) -> tuple[Optional[str], Optional[str]]:
         """Extract the first non-empty TextArea value from context.
+
+        Returns (mixed_prompt, pure_prompt):
+          - mixed_prompt from text_prompt_mixed
+          - pure_prompt  from legacy text_prompt or missing from_name
 
         Skips the scores TextArea (from_name="scores") to avoid feeding
         backend-generated score output back in as a text prompt.
         """
+        mixed_prompt: Optional[str] = None
+        legacy_prompt: Optional[str] = None
+
         for item in context.get("result", []):
-            if item.get("type") == "textarea" and item.get("from_name") != "scores":
-                texts = item["value"].get("text", [])
-                if texts:
-                    candidate = str(texts[0]).strip()
-                    if candidate:
-                        return candidate
-        return None
+            if item.get("type") != "textarea":
+                continue
+
+            from_name = str(item.get("from_name", "") or "")
+            if from_name == "scores":
+                continue
+
+            texts = item.get("value", {}).get("text", [])
+            if not texts:
+                continue
+
+            candidate = str(texts[0]).strip()
+            if not candidate:
+                continue
+
+            if from_name == "text_prompt_mixed":
+                mixed_prompt = candidate
+                continue
+
+            if from_name in ("", "text_prompt") and legacy_prompt is None:
+                legacy_prompt = candidate
+
+        return mixed_prompt, legacy_prompt
 
     @staticmethod
     def _mask_to_bbox_pct(mask: np.ndarray) -> Optional[dict]:

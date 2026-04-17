@@ -99,6 +99,32 @@ def _download_ls_url(url: str) -> str:
     return filepath
 
 
+def _ls_api_get_json(path: str, timeout_sec: int = 10) -> Optional[Dict[str, Any]]:
+    """GET Label Studio API JSON payload with Token auth.
+
+    Used as a fallback for smart-trigger calls where context.result omits
+    non-geometric controls and task payload doesn't include annotations.
+    """
+
+    ls_base = os.getenv("LABEL_STUDIO_URL", "http://label-studio:8080").rstrip("/")
+    api_key = os.getenv("LABEL_STUDIO_API_KEY", "")
+    headers = {"Authorization": f"Token {api_key}"} if api_key else {}
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    url = f"{ls_base}{normalized_path}"
+
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout_sec)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.debug("Label Studio API GET failed (%s): %s", url, exc)
+        return None
+
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 MODEL_ID: str = os.getenv("SAM3_IMAGE_MODEL_ID", os.getenv("SAM3_MODEL_ID", "facebook/sam3.1"))
@@ -109,6 +135,27 @@ ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
 CONFIDENCE_THRESHOLD: float = float(os.getenv("SAM3_CONFIDENCE_THRESHOLD", "0.5"))
 # Return all detected masks from text-prompt (False = top-1 by score)
 RETURN_ALL_MASKS: bool = os.getenv("SAM3_RETURN_ALL_MASKS", "false").lower() == "true"
+# Candidate selection strategy when RETURN_ALL_MASKS is disabled.
+# Supported: adaptive | top1 | topk | threshold
+MASK_SELECTION_MODE: str = os.getenv("SAM3_MASK_SELECTION_MODE", "all").strip().lower()
+VALID_SELECTION_MODES = {"adaptive", "top1", "topk", "threshold", "all"}
+SELECTION_MODE_ALIASES = {
+    "top-1": "top1",
+    "return_all": "all",
+    "all_masks": "all",
+}
+# Maximum masks returned for topk/adaptive modes.
+MAX_RETURNED_MASKS: int = max(1, int(os.getenv("SAM3_MAX_RETURNED_MASKS", "3")))
+# Minimum score gate for returned masks; 0 disables score filtering.
+MIN_RETURN_SCORE: float = float(os.getenv("SAM3_MIN_RETURN_SCORE", "0.0"))
+# If true, confidence threshold is applied to all selection modes.
+# If false, confidence threshold is only enforced in threshold mode.
+APPLY_THRESHOLD_GLOBALLY: bool = os.getenv("SAM3_APPLY_THRESHOLD_GLOBALLY", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 # Fallback when native point prompts are unavailable: half-size of point box (normalized).
 # Final box size is (2 * SAM3_POINT_FALLBACK_HALF_SIZE) in each dimension.
 POINT_FALLBACK_HALF_SIZE: float = float(os.getenv("SAM3_POINT_FALLBACK_HALF_SIZE", "0.005"))
@@ -229,6 +276,10 @@ except Exception as _hf_err:
 # in each worker.
 _processor = None   # Sam3Processor
 _init_lock = threading.Lock()
+_processor_runtime_lock = threading.Lock()
+_runtime_controls_cache_lock = threading.Lock()
+_runtime_controls_cache: Dict[str, Dict[str, Any]] = {}
+_runtime_controls_cache_max_entries: int = int(os.getenv("SAM3_RUNTIME_CONTROLS_CACHE_SIZE", "2048"))
 
 _last_used: float = 0.0
 _IDLE_TIMEOUT: int = int(os.getenv("GPU_IDLE_TIMEOUT_SECS", "3600"))  # default: 1 hour
@@ -327,6 +378,9 @@ class NewModel(LabelStudioMLBase):
       - <BrushLabels name="…" toName="…" smart="true"> — output masks
       - <Image name="…" value="$…">                    — input image
       - <TextArea name="…" toName="…">                 — text prompt (optional)
+        - <TextArea name="confidence_threshold" toName="…"> — threshold override (optional)
+                - <Choices name="selection_mode" toName="…">   — selection mode override (optional)
+                    (legacy <TextArea name="selection_mode"> is still accepted)
       - <KeyPointLabels name="…" toName="…" smart="true"> — point prompts (opt)
       - <RectangleLabels name="…" toName="…" smart="true"> — box prompts (opt)
 
@@ -359,17 +413,33 @@ class NewModel(LabelStudioMLBase):
             return ModelResponse(predictions=[])
 
         # ── Parse context ──────────────────────────────────────────────────────
-        # TextArea results don't carry original_width/height — find first geometric result.
-        # When only TextArea is present (text-only path), dimensions are read from the
-        # image itself after loading.
+        # Non-geometric controls (TextArea/Choices) don't carry original_width/height.
+        # Find first result that includes image dimensions.
+        # When no geometric result is present (text-only path), dimensions are read from
+        # the image itself after loading.
         geo_ctx = next(
-            (r for r in context["result"] if r.get("type") != "textarea"),
+            (
+                r
+                for r in context["result"]
+                if "original_width" in r and "original_height" in r
+            ),
             None,
         )
         image_width:  Optional[int] = geo_ctx["original_width"]  if geo_ctx else None
         image_height: Optional[int] = geo_ctx["original_height"] if geo_ctx else None
 
-        text_prompt: Optional[str] = None
+        pure_text_prompt: Optional[str] = None
+        mixed_text_prompt: Optional[str] = None
+        confidence_threshold: float = CONFIDENCE_THRESHOLD
+        selection_mode_override: Optional[str] = None
+        apply_threshold_globally_override: Optional[bool] = None
+        max_returned_masks: int = MAX_RETURNED_MASKS
+        pure_text_prompt_source: str = "default"
+        mixed_text_prompt_source: str = "default"
+        confidence_threshold_source: str = "default"
+        selection_mode_source: str = "default"
+        apply_threshold_globally_source: str = "default"
+        max_returned_masks_source: str = "default"
         point_coords: list[list[float]] = []
         point_labels: list[int] = []
         # Each entry: (box_xyxy_pixels, is_positive)
@@ -378,15 +448,125 @@ class NewModel(LabelStudioMLBase):
         selected_label: Optional[str] = None
 
         for ctx in context["result"]:
-            ctx_type = ctx["type"]
+            ctx_type = str(ctx.get("type", "") or "")
+
+            if ctx_type == "choices":
+                from_name_hint = str(ctx.get("from_name", "") or "")
+                choices = ctx.get("value", {}).get("choices", [])
+                if from_name_hint == "selection_mode" and choices:
+                    normalized_mode = self._normalize_selection_mode(str(choices[0]))
+                    if normalized_mode is None:
+                        logger.warning(
+                            "Invalid selection_mode choice '%s'; fallback to default mode",
+                            choices[0],
+                        )
+                    else:
+                        selection_mode_override = normalized_mode
+                        selection_mode_source = "context"
+                elif from_name_hint == "apply_threshold_globally":
+                    if not choices:
+                        apply_threshold_globally_override = False
+                        apply_threshold_globally_source = "context"
+                    else:
+                        normalized_bool = self._normalize_boolean_value(str(choices[0]))
+                        if normalized_bool is None:
+                            logger.warning(
+                                "Invalid apply_threshold_globally choice '%s'; fallback to env default %s",
+                                choices[0],
+                                APPLY_THRESHOLD_GLOBALLY,
+                            )
+                        else:
+                            apply_threshold_globally_override = normalized_bool
+                            apply_threshold_globally_source = "context"
+                continue
 
             if ctx_type == "textarea":
+                from_name_hint = str(ctx.get("from_name", "") or "")
+                if from_name_hint == "scores":
+                    continue
+
                 # TextArea value: {"text": ["user typed string"]}
-                texts = ctx["value"].get("text", [])
+                texts = ctx.get("value", {}).get("text", [])
+                if isinstance(texts, str):
+                    texts = [texts]
                 if texts:
                     candidate = str(texts[0]).strip()
                     if candidate:
-                        text_prompt = candidate
+                        if from_name_hint == "confidence_threshold":
+                            try:
+                                parsed_threshold = float(candidate)
+                                if not np.isfinite(parsed_threshold):
+                                    raise ValueError("non-finite")
+                                clamped_threshold = float(np.clip(parsed_threshold, 0.0, 1.0))
+                                if clamped_threshold != parsed_threshold:
+                                    logger.warning(
+                                        "confidence_threshold out of range (%.4f); clamped to %.4f",
+                                        parsed_threshold,
+                                        clamped_threshold,
+                                    )
+                                confidence_threshold = clamped_threshold
+                                confidence_threshold_source = "context"
+                            except (TypeError, ValueError):
+                                logger.warning(
+                                    "Invalid confidence_threshold input '%s'; fallback to env default %.4f",
+                                    candidate,
+                                    CONFIDENCE_THRESHOLD,
+                                )
+                        elif from_name_hint == "selection_mode":
+                            normalized_mode = self._normalize_selection_mode(candidate)
+                            if normalized_mode is None:
+                                logger.warning(
+                                    "Invalid selection_mode input '%s'; fallback to default mode",
+                                    candidate,
+                                )
+                            else:
+                                selection_mode_override = normalized_mode
+                                selection_mode_source = "context"
+                        elif from_name_hint == "apply_threshold_globally":
+                            normalized_bool = self._normalize_boolean_value(candidate)
+                            if normalized_bool is None:
+                                logger.warning(
+                                    "Invalid apply_threshold_globally input '%s'; fallback to env default %s",
+                                    candidate,
+                                    APPLY_THRESHOLD_GLOBALLY,
+                                )
+                            else:
+                                apply_threshold_globally_override = normalized_bool
+                                apply_threshold_globally_source = "context"
+                        elif from_name_hint in ("selection_topk_k", "max_returned_masks"):
+                            try:
+                                parsed_k_raw = float(candidate)
+                                if not np.isfinite(parsed_k_raw):
+                                    raise ValueError("non-finite")
+                                if not parsed_k_raw.is_integer():
+                                    raise ValueError("non-integer")
+                                parsed_k = int(parsed_k_raw)
+                                if parsed_k < 1:
+                                    logger.warning(
+                                        "selection_topk_k must be >= 1 (got %d); clamped to 1",
+                                        parsed_k,
+                                    )
+                                    parsed_k = 1
+                                max_returned_masks = parsed_k
+                                max_returned_masks_source = "context"
+                            except (TypeError, ValueError):
+                                logger.warning(
+                                    "Invalid selection_topk_k input '%s'; fallback to env default %d",
+                                    candidate,
+                                    MAX_RETURNED_MASKS,
+                                )
+                        elif from_name_hint == "text_prompt_mixed":
+                            mixed_text_prompt = candidate
+                            mixed_text_prompt_source = "context"
+                        elif from_name_hint in ("", "text_prompt"):
+                            # Backward compatibility: keep supporting legacy text_prompt.
+                            if pure_text_prompt is None:
+                                pure_text_prompt = candidate
+                                pure_text_prompt_source = "context"
+                        elif pure_text_prompt is None:
+                            # Backward compatibility for custom prompt field names.
+                            pure_text_prompt = candidate
+                            pure_text_prompt_source = "context"
                 continue  # no x/y/label for textarea
 
             # All geometric types share x, y in percentage
@@ -414,14 +594,219 @@ class NewModel(LabelStudioMLBase):
                 box_h = ctx["value"].get("height", 0.0) * image_height / 100.0
                 input_boxes.append(([x, y, x + box_w, y + box_h], not _is_exclude))
 
+        # Smart-trigger payloads from some Label Studio flows may omit non-geometric
+        # control widgets in context.result. Recover control values from the matching
+        # annotation result as a fallback, while keeping context values highest-priority.
+        fallback_control_results = self._get_annotation_results_for_context(
+            tasks[0] if tasks else {},
+            context,
+        )
+        if fallback_control_results:
+            for ctx in fallback_control_results:
+                ctx_type = str(ctx.get("type", "") or "")
+
+                if ctx_type == "choices":
+                    from_name_hint = str(ctx.get("from_name", "") or "")
+                    choices = ctx.get("value", {}).get("choices", [])
+                    if from_name_hint == "selection_mode" and selection_mode_source == "default" and choices:
+                        normalized_mode = self._normalize_selection_mode(str(choices[0]))
+                        if normalized_mode is not None:
+                            selection_mode_override = normalized_mode
+                            selection_mode_source = "annotation"
+                    elif from_name_hint == "apply_threshold_globally" and apply_threshold_globally_source == "default":
+                        if not choices:
+                            apply_threshold_globally_override = False
+                            apply_threshold_globally_source = "annotation"
+                        else:
+                            normalized_bool = self._normalize_boolean_value(str(choices[0]))
+                            if normalized_bool is not None:
+                                apply_threshold_globally_override = normalized_bool
+                                apply_threshold_globally_source = "annotation"
+                    continue
+
+                if ctx_type != "textarea":
+                    continue
+
+                from_name_hint = str(ctx.get("from_name", "") or "")
+                if from_name_hint == "scores":
+                    continue
+
+                texts = ctx.get("value", {}).get("text", [])
+                if isinstance(texts, str):
+                    texts = [texts]
+                if not texts:
+                    continue
+
+                candidate = str(texts[0]).strip()
+                if not candidate:
+                    continue
+
+                if from_name_hint == "confidence_threshold" and confidence_threshold_source == "default":
+                    try:
+                        parsed_threshold = float(candidate)
+                        if not np.isfinite(parsed_threshold):
+                            raise ValueError("non-finite")
+                        confidence_threshold = float(np.clip(parsed_threshold, 0.0, 1.0))
+                        confidence_threshold_source = "annotation"
+                    except (TypeError, ValueError):
+                        pass
+                elif from_name_hint == "selection_mode" and selection_mode_source == "default":
+                    normalized_mode = self._normalize_selection_mode(candidate)
+                    if normalized_mode is not None:
+                        selection_mode_override = normalized_mode
+                        selection_mode_source = "annotation"
+                elif from_name_hint == "apply_threshold_globally" and apply_threshold_globally_source == "default":
+                    normalized_bool = self._normalize_boolean_value(candidate)
+                    if normalized_bool is not None:
+                        apply_threshold_globally_override = normalized_bool
+                        apply_threshold_globally_source = "annotation"
+                elif from_name_hint in ("selection_topk_k", "max_returned_masks") and max_returned_masks_source == "default":
+                    try:
+                        parsed_k_raw = float(candidate)
+                        if not np.isfinite(parsed_k_raw):
+                            raise ValueError("non-finite")
+                        if not parsed_k_raw.is_integer():
+                            raise ValueError("non-integer")
+                        max_returned_masks = max(1, int(parsed_k_raw))
+                        max_returned_masks_source = "annotation"
+                    except (TypeError, ValueError):
+                        pass
+                elif from_name_hint == "text_prompt_mixed" and mixed_text_prompt_source == "default":
+                    mixed_text_prompt = candidate
+                    mixed_text_prompt_source = "annotation"
+                elif from_name_hint in ("", "text_prompt") and pure_text_prompt_source == "default":
+                    pure_text_prompt = candidate
+                    pure_text_prompt_source = "annotation"
+                elif pure_text_prompt_source == "default":
+                    pure_text_prompt = candidate
+                    pure_text_prompt_source = "annotation"
+
+        runtime_cache_key = self._runtime_controls_cache_key(
+            tasks[0] if tasks else {},
+            context,
+        )
+        cached_controls = self._get_cached_runtime_controls(runtime_cache_key) if runtime_cache_key else {}
+        if cached_controls:
+            if pure_text_prompt_source == "default" and cached_controls.get("pure_text_prompt"):
+                pure_text_prompt = str(cached_controls["pure_text_prompt"]).strip() or None
+                if pure_text_prompt:
+                    pure_text_prompt_source = "cache"
+            if mixed_text_prompt_source == "default" and cached_controls.get("mixed_text_prompt"):
+                mixed_text_prompt = str(cached_controls["mixed_text_prompt"]).strip() or None
+                if mixed_text_prompt:
+                    mixed_text_prompt_source = "cache"
+            if confidence_threshold_source == "default" and "confidence_threshold" in cached_controls:
+                try:
+                    confidence_threshold = float(np.clip(float(cached_controls["confidence_threshold"]), 0.0, 1.0))
+                    confidence_threshold_source = "cache"
+                except (TypeError, ValueError):
+                    pass
+            if selection_mode_source == "default" and "selection_mode" in cached_controls:
+                normalized_mode = self._normalize_selection_mode(str(cached_controls["selection_mode"]))
+                if normalized_mode is not None:
+                    selection_mode_override = normalized_mode
+                    selection_mode_source = "cache"
+            if apply_threshold_globally_source == "default" and "apply_threshold_globally" in cached_controls:
+                normalized_bool = self._normalize_boolean_value(str(cached_controls["apply_threshold_globally"]))
+                if normalized_bool is not None:
+                    apply_threshold_globally_override = normalized_bool
+                    apply_threshold_globally_source = "cache"
+            if max_returned_masks_source == "default" and "max_returned_masks" in cached_controls:
+                try:
+                    max_returned_masks = max(1, int(float(cached_controls["max_returned_masks"])))
+                    max_returned_masks_source = "cache"
+                except (TypeError, ValueError):
+                    pass
+
+        has_geo  = bool(point_coords) or bool(input_boxes)
+        text_prompt_source = "none"
+        source_priority = {"default": 0, "annotation": 1, "cache": 2, "context": 3}
+        # With geometric cues, prefer mixed text prompt. If mixed is absent, pure text
+        # still participates so geo+pure is a real, effective inference path.
+        if has_geo:
+            mixed_priority = source_priority.get(mixed_text_prompt_source, 0) if mixed_text_prompt else -1
+            pure_priority = source_priority.get(pure_text_prompt_source, 0) if pure_text_prompt else -1
+            if mixed_text_prompt and mixed_priority > pure_priority:
+                text_prompt = mixed_text_prompt
+                text_prompt_source = "mixed"
+            elif pure_text_prompt and pure_priority > mixed_priority:
+                text_prompt = pure_text_prompt
+                text_prompt_source = "pure_geo"
+            elif mixed_text_prompt:
+                # Same source priority prefers mixed in geo flows.
+                text_prompt = mixed_text_prompt
+                text_prompt_source = "mixed"
+            elif pure_text_prompt:
+                text_prompt = pure_text_prompt
+                text_prompt_source = "pure_geo"
+            else:
+                text_prompt = None
+        else:
+            if pure_text_prompt:
+                text_prompt = pure_text_prompt
+                text_prompt_source = "pure"
+            else:
+                text_prompt = None
+
+        default_selection_mode = "all" if RETURN_ALL_MASKS else MASK_SELECTION_MODE
+        selection_mode = (
+            selection_mode_override
+            or self._normalize_selection_mode(default_selection_mode)
+            or "adaptive"
+        )
+        effective_apply_threshold_globally = (
+            apply_threshold_globally_override
+            if apply_threshold_globally_override is not None
+            else APPLY_THRESHOLD_GLOBALLY
+        )
+
+        if runtime_cache_key:
+            cache_payload: Dict[str, Any] = {}
+            if pure_text_prompt and pure_text_prompt_source != "default":
+                cache_payload["pure_text_prompt"] = pure_text_prompt
+            if mixed_text_prompt and mixed_text_prompt_source != "default":
+                cache_payload["mixed_text_prompt"] = mixed_text_prompt
+            if confidence_threshold_source != "default":
+                cache_payload["confidence_threshold"] = confidence_threshold
+            if selection_mode_source != "default":
+                cache_payload["selection_mode"] = selection_mode
+            if apply_threshold_globally_source != "default":
+                cache_payload["apply_threshold_globally"] = str(effective_apply_threshold_globally).lower()
+            if max_returned_masks_source != "default":
+                cache_payload["max_returned_masks"] = max_returned_masks
+            if cache_payload:
+                self._set_cached_runtime_controls(runtime_cache_key, cache_payload)
+
+        logger.info(
+            "Runtime controls resolved: threshold=%.4f(%s) selection_mode=%s(%s) apply_threshold_globally=%s(%s) max_returned_masks=%d(%s) text_prompt_source[pure=%s,mixed=%s]",
+            confidence_threshold,
+            confidence_threshold_source,
+            selection_mode,
+            selection_mode_source,
+            effective_apply_threshold_globally,
+            apply_threshold_globally_source,
+            max_returned_masks,
+            max_returned_masks_source,
+            pure_text_prompt_source,
+            mixed_text_prompt_source,
+        )
+
         logger.debug(
-            "text=%r  points=%s  labels=%s  boxes=%s  label=%s",
-            text_prompt, point_coords, point_labels,
-            [(b, "+" if p else "-") for b, p in input_boxes], selected_label,
+            "text=%r  text_source=%s  points=%s  labels=%s  boxes=%s  label=%s  threshold=%.4f  selection_mode=%s  apply_threshold_globally=%s  max_returned_masks=%d",
+            text_prompt,
+            text_prompt_source,
+            point_coords,
+            point_labels,
+            [(b, "+" if p else "-") for b, p in input_boxes], selected_label, confidence_threshold, selection_mode, effective_apply_threshold_globally, max_returned_masks,
         )
 
         has_text = ENABLE_PCS and text_prompt is not None
-        has_geo  = bool(point_coords) or bool(input_boxes)
+
+        if has_geo and ENABLE_PCS and text_prompt is None:
+            logger.info(
+                "Geo trigger without resolved text prompt: falling back to geo_only. "
+                "Ensure mixed text is submitted (+ Add) or saved in annotation results."
+            )
 
         if not has_text and not has_geo:
             return ModelResponse(predictions=[])
@@ -478,6 +863,9 @@ class NewModel(LabelStudioMLBase):
         # Text-only path: no geometric context, derive dimensions from the image.
         if image_width is None or image_height is None:
             image_width, image_height = pil_img.size  # PIL: (width, height)
+        assert image_width is not None and image_height is not None
+        image_width = int(image_width)
+        image_height = int(image_height)
 
         image = np.array(pil_img)
 
@@ -488,6 +876,11 @@ class NewModel(LabelStudioMLBase):
                     image, text_prompt, point_coords, point_labels, input_boxes,
                     selected_label, image_width, image_height,
                     from_name, to_name,
+                    confidence_threshold=confidence_threshold,
+                    selection_mode=selection_mode,
+                    text_prompt_source=text_prompt_source,
+                    apply_threshold_globally=effective_apply_threshold_globally,
+                    max_returned_masks=max_returned_masks,
                 )
         except Exception as exc:
             logger.error("Predict failed: %s", exc, exc_info=True)
@@ -495,6 +888,65 @@ class NewModel(LabelStudioMLBase):
 
     def fit(self, event: str, data: dict, **kwargs) -> None:
         logger.info("Received event '%s' (fit not implemented)", event)
+
+    @staticmethod
+    def _select_mask_indices(
+        scores_tensor: Optional[torch.Tensor],
+        n_total: int,
+        *,
+        has_text: bool,
+        has_geo: bool,
+        selection_mode: str,
+        min_return_score: float,
+        max_returned_masks: int,
+    ) -> list[int]:
+        """Choose which mask candidates should be returned to Label Studio."""
+        if n_total <= 0:
+            return []
+
+        sorted_indices = list(range(n_total))
+        if scores_tensor is not None:
+            sorted_indices = sorted(
+                range(n_total),
+                key=lambda idx: float(scores_tensor[idx]),
+                reverse=True,
+            )
+
+        if selection_mode == "all":
+            selected = sorted_indices
+        elif selection_mode == "top1":
+            selected = sorted_indices[:1]
+        elif selection_mode == "topk":
+            selected = sorted_indices[: min(max_returned_masks, n_total)]
+        elif selection_mode == "threshold":
+            if scores_tensor is None:
+                selected = sorted_indices[:1]
+            else:
+                selected = [
+                    idx for idx in sorted_indices
+                    if float(scores_tensor[idx]) >= min_return_score
+                ]
+        else:
+            # adaptive mode
+            if has_text and not has_geo:
+                cap = min(n_total, max_returned_masks, 3)
+                selected = sorted_indices[: max(1, cap)]
+            elif has_geo and not has_text:
+                cap = min(n_total, max_returned_masks, 2)
+                selected = sorted_indices[: max(1, cap)]
+            else:
+                selected = sorted_indices[:1]
+
+        if scores_tensor is not None and min_return_score > 0 and selection_mode != "threshold":
+            selected = [idx for idx in selected if float(scores_tensor[idx]) >= min_return_score]
+
+        if not selected and (selection_mode == "threshold" or min_return_score > 0):
+            return []
+
+        if not selected:
+            selected = sorted_indices[:1]
+
+        return selected
 
     # ── SAM3 path ──────────────────────────────────────────────────────────────
 
@@ -510,6 +962,12 @@ class NewModel(LabelStudioMLBase):
         image_height: int,
         from_name: str,
         to_name: str,
+        *,
+        confidence_threshold: float,
+        selection_mode: str,
+        text_prompt_source: str,
+        apply_threshold_globally: bool = APPLY_THRESHOLD_GLOBALLY,
+        max_returned_masks: int = MAX_RETURNED_MASKS,
     ) -> ModelResponse:
         """Run SAM3 Sam3Processor pipeline."""
         ctx = torch.autocast(**_autocast_kwargs) if _autocast_kwargs else None
@@ -519,6 +977,11 @@ class NewModel(LabelStudioMLBase):
             return self._predict_sam3_inner(
                 image, text_prompt, point_coords, point_labels, input_boxes,
                 selected_label, image_width, image_height, from_name, to_name,
+                confidence_threshold=confidence_threshold,
+                selection_mode=selection_mode,
+                text_prompt_source=text_prompt_source,
+                apply_threshold_globally=apply_threshold_globally,
+                max_returned_masks=max_returned_masks,
             )
         finally:
             if ctx:
@@ -536,6 +999,12 @@ class NewModel(LabelStudioMLBase):
         image_height: int,
         from_name: str,
         to_name: str,
+        *,
+        confidence_threshold: float,
+        selection_mode: str,
+        text_prompt_source: str,
+        apply_threshold_globally: bool = APPLY_THRESHOLD_GLOBALLY,
+        max_returned_masks: int = MAX_RETURNED_MASKS,
     ) -> ModelResponse:
         def _add_point_prompt_or_fallback(
             state_dict: dict,
@@ -559,7 +1028,16 @@ class NewModel(LabelStudioMLBase):
             try:
                 # Geometric-only prompts require the synthetic "visual" text token.
                 if "language_features" not in state_dict.get("backbone_out", {}):
-                    state_dict = _processor.set_text_prompt(prompt="visual", state=state_dict)  # type: ignore[attr-defined]
+                    if _processor is not None and hasattr(_processor, "confidence_threshold"):
+                        with _processor_runtime_lock:
+                            previous_threshold = getattr(_processor, "confidence_threshold")
+                            try:
+                                setattr(_processor, "confidence_threshold", confidence_threshold)
+                                state_dict = _processor.set_text_prompt(prompt="visual", state=state_dict)  # type: ignore[attr-defined]
+                            finally:
+                                setattr(_processor, "confidence_threshold", previous_threshold)
+                    else:
+                        state_dict = _processor.set_text_prompt(prompt="visual", state=state_dict)  # type: ignore[attr-defined]
 
                 geom_prompt = state_dict.get("geometric_prompt")
                 can_append_points = (
@@ -606,14 +1084,59 @@ class NewModel(LabelStudioMLBase):
                 state=state_dict,
             )
 
+        def _set_text_prompt_with_threshold(
+            state_dict: dict,
+            prompt: str,
+        ) -> dict:
+            if _processor is None:
+                raise RuntimeError("SAM3 processor not initialized")
+
+            # Preferred path: pass threshold per call if the installed sam3 API supports it.
+            try:
+                return _processor.set_text_prompt(  # type: ignore[attr-defined]
+                    prompt=prompt,
+                    state=state_dict,
+                    confidence_threshold=confidence_threshold,
+                )
+            except TypeError:
+                # Fallback for sam3 builds where threshold is a processor attribute.
+                pass
+
+            if hasattr(_processor, "confidence_threshold"):
+                with _processor_runtime_lock:
+                    previous_threshold = getattr(_processor, "confidence_threshold")
+                    try:
+                        setattr(_processor, "confidence_threshold", confidence_threshold)
+                        return _processor.set_text_prompt(prompt=prompt, state=state_dict)  # type: ignore[attr-defined]
+                    finally:
+                        setattr(_processor, "confidence_threshold", previous_threshold)
+
+            return _processor.set_text_prompt(prompt=prompt, state=state_dict)  # type: ignore[attr-defined]
+
         state = _processor.set_image(Image.fromarray(image))  # type: ignore[attr-defined]
 
         has_text = text_prompt is not None
+        has_geo = bool(input_boxes or point_coords)
+        effective_max_returned_masks = max(1, int(max_returned_masks))
+        if has_text and has_geo:
+            inference_mode = "mixed_text_geo" if text_prompt_source == "mixed" else "text_geo"
+        elif has_text:
+            inference_mode = "text_only"
+        elif has_geo:
+            inference_mode = "geo_only"
+        else:
+            inference_mode = "none"
+        active_selection_mode = self._normalize_selection_mode(selection_mode) or "adaptive"
+        threshold_scope = "global" if apply_threshold_globally else "threshold-only"
+        if apply_threshold_globally or active_selection_mode == "threshold":
+            effective_score_gate = max(MIN_RETURN_SCORE, confidence_threshold)
+        else:
+            effective_score_gate = MIN_RETURN_SCORE
 
         # Text prompt (PCS)
         if has_text:
             assert text_prompt is not None
-            state = _processor.set_text_prompt(prompt=text_prompt, state=state)  # type: ignore[attr-defined]
+            state = _set_text_prompt_with_threshold(state, text_prompt)
 
         # Geometric prompts — boxes (positive and negative/Exclude)
         # Sam3Processor.add_geometric_prompt() expects:
@@ -645,7 +1168,12 @@ class NewModel(LabelStudioMLBase):
         boxes_tensor  = state.get("boxes")   # [N, 4] float pixel xyxy (may be None)
 
         if masks_tensor is None or masks_tensor.shape[0] == 0:
-            logger.info("SAM3 returned no detections (threshold=%.2f).", CONFIDENCE_THRESHOLD)
+            logger.info(
+                "SAM3 returned no detections (mode=%s, selection_mode=%s, threshold=%.2f).",
+                inference_mode,
+                active_selection_mode,
+                confidence_threshold,
+            )
             return ModelResponse(predictions=[])
 
         n_total = masks_tensor.shape[0]
@@ -656,15 +1184,30 @@ class NewModel(LabelStudioMLBase):
                 b = boxes_tensor[i].cpu().tolist() if boxes_tensor is not None else None
                 logger.info("  [SAM3] candidate %d  score=%.4f  box=%s", i, s, b)
 
-        # Determine which masks to return
-        if RETURN_ALL_MASKS:
-            indices = list(range(n_total))
-        else:
-            best_idx = int(scores_tensor.argmax().item()) if scores_tensor is not None else 0
-            indices = [best_idx]
+        indices = self._select_mask_indices(
+            scores_tensor,
+            n_total,
+            has_text=has_text,
+            has_geo=has_geo,
+            selection_mode=active_selection_mode,
+            min_return_score=effective_score_gate,
+            max_returned_masks=effective_max_returned_masks,
+        )
+        if not indices:
+            logger.info(
+                "SAM3 returned %d candidates, but none satisfied selection mode '%s' with threshold=%.4f (mode=%s, text_source=%s)",
+                n_total,
+                active_selection_mode,
+                effective_score_gate,
+                inference_mode,
+                text_prompt_source,
+            )
+            return ModelResponse(predictions=[])
 
         results = []
-        score_lines: list[str] = []
+        score_lines: list[str] = [
+            f"mode={inference_mode}, text_source={text_prompt_source}, selection_mode={active_selection_mode}, threshold={effective_score_gate:.4f}, threshold_scope={threshold_scope}, topk_k={effective_max_returned_masks}"
+        ]
         for rank, idx in enumerate(indices):
             mask_np = masks_tensor[idx, 0].cpu().numpy().astype(np.uint8)
             score   = float(scores_tensor[idx]) if scores_tensor is not None else 1.0
@@ -693,10 +1236,20 @@ class NewModel(LabelStudioMLBase):
 
         # All candidates summary (even those filtered out)
         if scores_tensor is not None and n_total > len(indices):
-            score_lines.append(f"(+{n_total - len(indices)} filtered candidates)")
+            score_lines.append(
+                f"(+{n_total - len(indices)} filtered candidates; mode={active_selection_mode})"
+            )
 
         best_score = float(scores_tensor[indices].max()) if scores_tensor is not None else 1.0
-        logger.info("[SAM3] returning %d mask(s), best=%.4f", len(indices), best_score)
+        logger.info(
+            "[SAM3][mode=%s][text_source=%s][selection_mode=%s] returning %d mask(s), best=%.4f",
+            inference_mode,
+            text_prompt_source,
+            active_selection_mode,
+            len(indices),
+            best_score,
+        )
+        logger.info("Inference scores (mode=%s, selection_mode=%s):\n%s", inference_mode, active_selection_mode, "\n".join(score_lines))
 
         # Score display result — fills <TextArea name="scores"> in labeling config
         results.append({
@@ -712,4 +1265,155 @@ class NewModel(LabelStudioMLBase):
             "model_version": self.get("model_version"),
             "score":         best_score,
         }])
+
+    @staticmethod
+    def _get_annotation_results_for_context(task: Dict[str, Any], context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return annotation results as fallback control source for smart-trigger calls.
+
+        Some Label Studio smart-tool flows send only geometric entries in
+        context.result, omitting TextArea/Choices controls. This helper picks the
+        matching annotation (by context.annotation_id when available) and returns
+        its result list so runtime controls can still be resolved.
+        """
+
+        def _normalize_id(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            return str(value)
+
+        def _extract_result(annotation: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            result = annotation.get("result") if isinstance(annotation, dict) else None
+            if not isinstance(result, list):
+                return []
+            return [item for item in result if isinstance(item, dict)]
+
+        context_annotation_id: Optional[str] = None
+        if isinstance(context, dict):
+            context_annotation_id = _normalize_id(context.get("annotation_id"))
+            if context_annotation_id is None:
+                annotation_obj = context.get("annotation")
+                if isinstance(annotation_obj, dict):
+                    context_annotation_id = _normalize_id(annotation_obj.get("id"))
+
+        def _pick_target_annotation(annotations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            target: Optional[Dict[str, Any]] = None
+            if context_annotation_id is not None:
+                for annotation in annotations:
+                    if _normalize_id(annotation.get("id")) == context_annotation_id:
+                        target = annotation
+                        break
+
+            if target is None:
+                candidates = [
+                    annotation
+                    for annotation in annotations
+                    if isinstance(annotation.get("result"), list)
+                    and annotation.get("result")
+                ]
+                if not candidates:
+                    return None
+
+                def _sort_key(annotation: Dict[str, Any]) -> str:
+                    updated_at = annotation.get("updated_at")
+                    created_at = annotation.get("created_at")
+                    return str(updated_at or created_at or "")
+
+                target = sorted(candidates, key=_sort_key)[-1]
+
+            return target
+
+        annotations = task.get("annotations") if isinstance(task, dict) else None
+        if isinstance(annotations, list) and annotations:
+            local_annotations = [item for item in annotations if isinstance(item, dict)]
+            local_target = _pick_target_annotation(local_annotations)
+            local_result = _extract_result(local_target)
+            if local_result:
+                return local_result
+
+        if context_annotation_id is not None:
+            annotation_payload = _ls_api_get_json(f"/api/annotations/{context_annotation_id}")
+            annotation_result = _extract_result(annotation_payload)
+            if annotation_result:
+                logger.info(
+                    "Recovered prompt controls from Label Studio annotation API (annotation_id=%s)",
+                    context_annotation_id,
+                )
+                return annotation_result
+
+        task_id = _normalize_id(task.get("id")) if isinstance(task, dict) else None
+        if task_id is not None:
+            task_payload = _ls_api_get_json(f"/api/tasks/{task_id}")
+            task_annotations = task_payload.get("annotations") if isinstance(task_payload, dict) else None
+            if isinstance(task_annotations, list) and task_annotations:
+                remote_annotations = [item for item in task_annotations if isinstance(item, dict)]
+                remote_target = _pick_target_annotation(remote_annotations)
+                remote_result = _extract_result(remote_target)
+                if remote_result:
+                    logger.info(
+                        "Recovered prompt controls from Label Studio task API (task_id=%s)",
+                        task_id,
+                    )
+                    return remote_result
+
+        return []
+
+    @staticmethod
+    def _runtime_controls_cache_key(task: Dict[str, Any], context: Optional[Dict[str, Any]]) -> Optional[str]:
+        def _normalize_id(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            return str(value)
+
+        task_id = _normalize_id(task.get("id")) if isinstance(task, dict) else None
+        if task_id is None:
+            return None
+
+        annotation_id: Optional[str] = None
+        if isinstance(context, dict):
+            annotation_id = _normalize_id(context.get("annotation_id"))
+            if annotation_id is None:
+                annotation_obj = context.get("annotation")
+                if isinstance(annotation_obj, dict):
+                    annotation_id = _normalize_id(annotation_obj.get("id"))
+
+        return f"{task_id}:{annotation_id or 'none'}"
+
+    @staticmethod
+    def _get_cached_runtime_controls(cache_key: str) -> Dict[str, Any]:
+        with _runtime_controls_cache_lock:
+            cache_value = _runtime_controls_cache.get(cache_key)
+            if not isinstance(cache_value, dict):
+                return {}
+            return dict(cache_value)
+
+    @staticmethod
+    def _set_cached_runtime_controls(cache_key: str, payload: Dict[str, Any]) -> None:
+        if not payload:
+            return
+        with _runtime_controls_cache_lock:
+            existing = _runtime_controls_cache.get(cache_key)
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(payload)
+            _runtime_controls_cache[cache_key] = merged
+            if len(_runtime_controls_cache) > _runtime_controls_cache_max_entries:
+                # FIFO eviction: keep most recent entries and trim the oldest key.
+                oldest_key = next(iter(_runtime_controls_cache))
+                _runtime_controls_cache.pop(oldest_key, None)
+
+    @staticmethod
+    def _normalize_selection_mode(raw_mode: str) -> Optional[str]:
+        mode = str(raw_mode or "").strip().lower()
+        mode = SELECTION_MODE_ALIASES.get(mode, mode)
+        if mode in VALID_SELECTION_MODES:
+            return mode
+        return None
+
+    @staticmethod
+    def _normalize_boolean_value(raw_value: str) -> Optional[bool]:
+        value = str(raw_value or "").strip().lower()
+        if value in {"1", "true", "yes", "on", "enabled", "enable", "global", "apply_threshold_globally"}:
+            return True
+        if value in {"0", "false", "no", "off", "disabled", "disable", "threshold-only", "threshold_only"}:
+            return False
+        return None
 
