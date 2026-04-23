@@ -12,6 +12,7 @@ set -eu
 MINIO_ALIAS="local"
 MINIO_ENDPOINT="http://minio:9000"
 BUCKETS="${MINIO_BUCKET:-label-studio-bucket}"
+ANONYMOUS_DOWNLOAD="${MINIO_ANONYMOUS_DOWNLOAD:-false}"
 
 echo "[init-minio] Waiting for MinIO to be ready..."
 until mc alias set "${MINIO_ALIAS}" "${MINIO_ENDPOINT}" \
@@ -25,11 +26,18 @@ for BUCKET in $(echo "${BUCKETS}" | tr ',' ' '); do
     echo "[init-minio] Creating bucket: ${BUCKET}"
     mc mb --ignore-existing "${MINIO_ALIAS}/${BUCKET}"
 
-    # Policy: download (anonymous GET, no LIST)
-    # Presigned URLs remain readable by anyone who holds the URL,
-    # but public directory listing is disabled.
-    echo "[init-minio] Setting anonymous download policy on ${BUCKET}"
-    mc anonymous set download "${MINIO_ALIAS}/${BUCKET}"
+    # Policy defaults to private for better security.
+    # Set MINIO_ANONYMOUS_DOWNLOAD=true only when public read is required.
+    case "${ANONYMOUS_DOWNLOAD}" in
+        true|TRUE|True|1|yes|YES|Yes)
+            echo "[init-minio] Setting anonymous download policy on ${BUCKET}"
+            mc anonymous set download "${MINIO_ALIAS}/${BUCKET}"
+            ;;
+        *)
+            echo "[init-minio] Setting private policy on ${BUCKET}"
+            mc anonymous set none "${MINIO_ALIAS}/${BUCKET}"
+            ;;
+    esac
 done
 
 # ── CORS ──────────────────────────────────────────────────
@@ -60,19 +68,31 @@ if [ -n "${MINIO_LS_ACCESS_ID:-}" ] && [ -n "${MINIO_LS_SECRET_KEY:-}" ]; then
         fi
     done
 
-    # Write bucket-scoped IAM policy
+        # Write bucket-scoped IAM policy.
+        # tus resumable upload relies on S3 multipart APIs; grant the
+        # multipart-specific actions explicitly to avoid AccessDenied.
     cat > /tmp/ls-policy.json << EOF
 {
   "Version": "2012-10-17",
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+            ],
       "Resource": [${OBJECT_RESOURCES}]
     },
     {
       "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:ListBucketMultipartUploads"
+            ],
       "Resource": [${BUCKET_RESOURCES}]
     }
   ]

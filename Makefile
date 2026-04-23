@@ -9,7 +9,8 @@
         test-sam3-image test-sam3-video \
         test-sam21-image test-sam21-video \
         init-minio health create-admin reset-password \
-        push
+        push \
+        batch-annotate batch-server
 
 # ─── Core stack ─────────────────────────────────────────────
 up:
@@ -99,6 +100,21 @@ reset-password:
 # ─── Health check ────────────────────────────────────────────
 health:
 	@bash scripts/healthcheck.sh
+
+# ─── Batch Annotation ────────────────────────────────────────
+batch-annotate:
+	@[ -n "$(PROJECT_ID)" ] || (echo "Usage: make batch-annotate PROJECT_ID=<id> [BACKEND=sam3|sam21]"; exit 1)
+	LABEL_STUDIO_API_KEY=$$(grep '^LABEL_STUDIO_API_KEY=' .env | cut -d= -f2-) \
+	  python scripts/batch_annotate.py \
+	    --project-id $(PROJECT_ID) \
+	    --backend $(or $(BACKEND),sam3) \
+	    --ls-url $$(grep '^LABEL_STUDIO_EXTERNAL_URL=' .env | cut -d= -f2- || echo http://localhost:8080) \
+	    $(if $(CONFIDENCE),--confidence $(CONFIDENCE),) \
+	    $(if $(MAX_TASKS),--max-tasks $(MAX_TASKS),) \
+	    $(if $(DRY_RUN),--dry-run,)
+
+batch-server:
+	docker compose up -d --build batch-server
 
 # ─── Git ─────────────────────────────────────────────────────
 push:

@@ -1,4 +1,4 @@
-# label-anything-sam
+﻿# label-anything-sam
 
 適用於生產環境的 Label Studio 部署方案，內含可選用的 SAM3 與 SAM2.1 ML 後端。
 

@@ -1,4 +1,4 @@
-# label-anything-sam
+﻿# label-anything-sam
 
 Production-ready Label Studio deployment stack with optional SAM3 and SAM2.1 ML backends.
 

@@ -32,3 +32,8 @@ services:
   nginx:
     ports:
       - "18090:80"
+
+  # Expose Batch Annotation Server (for local access)
+  batch-server:
+    ports:
+      - "18085:8085"
