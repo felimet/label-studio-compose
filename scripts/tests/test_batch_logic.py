@@ -20,6 +20,7 @@ def _make_response(status_code: int, json_data: dict):
     resp = MagicMock()
     resp.status_code = status_code
     resp.json.return_value = json_data
+    resp.text = str(json_data)
     return resp
 
 
@@ -30,6 +31,8 @@ def test_classify_protocol_fail_http_error():
             "http://localhost:9090",
             {"id": 1, "data": {}},
             {"result": []},
+            "<View></View>",
+            1,
         )
     assert status == "protocol_fail"
     assert result == []
@@ -43,6 +46,8 @@ def test_classify_zero_match():
             "http://localhost:9090",
             {"id": 1, "data": {}},
             {"result": []},
+            "<View></View>",
+            1,
         )
     assert status == "zero_match"
 
@@ -57,6 +62,8 @@ def test_classify_success():
             "http://localhost:9090",
             {"id": 1, "data": {}},
             {"result": []},
+            "<View></View>",
+            1,
         )
     assert status == "success"
     assert score == 0.92
@@ -69,6 +76,8 @@ def test_classify_network_error():
             "http://localhost:9090",
             {"id": 1, "data": {}},
             {"result": []},
+            "<View></View>",
+            1,
         )
     assert status == "protocol_fail"
 

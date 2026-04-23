@@ -4,10 +4,14 @@ from .constants import SAM3_PURE_TEXT_FROM_NAME
 
 
 def build_sam3_text_context(
-    label_names: list[str],
+    text_prompt: str,
     confidence: float = 0.5,
 ) -> dict:
     """Build SAM3 pure-text context for batch annotation.
+
+    text_prompt: free-form text supplied by the user via CLI --text-prompt or
+    the batch-server HTML form.  This replaces the old behaviour of joining
+    all <Label value> strings — the user now controls exactly what SAM3 sees.
 
     from_name MUST be SAM3_PURE_TEXT_FROM_NAME ('text_prompt').
     Never use SAM3_MIXED_FROM_NAME — that route requires co-existing geometry.
@@ -22,18 +26,17 @@ def build_sam3_text_context(
             "type": "textarea",
             "from_name": SAM3_PURE_TEXT_FROM_NAME,
             "to_name": "image",
-            "value": {"text": [", ".join(label_names)]},
+            "value": {"text": [text_prompt]},
         }
     ]
-    if confidence != 0.5:
-        results.append(
-            {
-                "type": "textarea",
-                "from_name": "confidence_threshold",
-                "to_name": "image",
-                "value": {"text": [str(confidence)]},
-            }
-        )
+    results.append(
+        {
+            "type": "textarea",
+            "from_name": "confidence_threshold",
+            "to_name": "image",
+            "value": {"text": [str(confidence)]},
+        }
+    )
     return {"result": results}
 
 
@@ -85,14 +88,21 @@ def build_sam21_grid_context(
     return {"result": results}
 
 
-def build_context(backend: str, label_names: list[str], args) -> dict:
+def build_context(
+    backend: str,
+    label_names: list[str],
+    args,
+    text_prompt: str = "",
+) -> dict:
     """Dispatch to the correct context builder based on --backend.
 
+    For SAM3: uses text_prompt (user-supplied string) instead of label_names.
+    For SAM2.1 grid: label_names is still used for the brush label hint.
     build_sam3_text_context() MUST NOT be called for backend=='sam21'.
     --backend sam21 without --sam21-mode grid is caught at pre-flight (exit 3).
     """
     if backend == "sam3":
-        return build_sam3_text_context(label_names, confidence=args.confidence)
+        return build_sam3_text_context(text_prompt, confidence=args.confidence)
     elif backend == "sam21" and getattr(args, "sam21_mode", None) == "grid":
         return build_sam21_grid_context(label_names, grid_n=args.grid_n)
     else:

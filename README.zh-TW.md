@@ -1,4 +1,4 @@
-﻿# label-anything-sam
+# label-anything-sam
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 ![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
@@ -214,13 +214,16 @@ Supabase 模式邊界：
 
 ```bash
 # CLI：對 project 1 執行 SAM3 批量標注
-python scripts/batch_annotate.py --project-id 1 --backend sam3
+python scripts/batch_annotate.py --project-id 1 --backend sam3 \
+    --text-prompt "cow, grass, fence"
 # 或
 make batch-annotate PROJECT_ID=1
 
 # Web UI：瀏覽器開啟 http://<your-server>:8085
 make batch-server
 ```
+
+![batch-annotation-ui](image/batch-annotation-ui.png)
 
 完整 CLI 參數說明、SAM3 vs SAM2.1 差異、並發設定與 Web UI 部署，請參閱
 [docs/batch-annotation.md](docs/batch-annotation.md)。

@@ -58,6 +58,8 @@ make batch-server
 | `--max-tasks INT` | （全部）| 限制處理任務數 |
 | `--resume` | 關閉 | 從上次成功的任務繼續 |
 | `--resume-file PATH` | `scripts/.batch_resume.json` | 續接狀態檔路徑 |
+| `--text-prompt STR` | （空）| SAM3 文字提示（描述要分割的物件，例：`cow, grass, fence`）|
+| `--task-ids STR` | （空）| 針對特定 task ID 處理（例：`1, 3, 17`）|
 | `--confidence FLOAT` | `0.5` | SAM3 信心閾值（僅 SAM3 有效）|
 | `--sam21-mode grid` | 關閉 | 啟用 SAM2.1 格點模式（實驗性）|
 | `--grid-n INT` | `3` | SAM2.1 格點邊長（N×N 個點）|
@@ -93,7 +95,6 @@ Docker Compose 環境下，`LABEL_STUDIO_API_KEY` 從 `.env.ml` 自動注入 bat
 | 多物件 | 支援（每個 label 一個遮罩）| 不支援（每張影像一個遮罩，取最高分）|
 | 準確度 | 較高 | 較低（幾何啟發式）|
 | 啟用方式 | 預設 | 須加 `--sam21-mode grid` |
-| 建議用途 | 正式環境 | 單一主體場景 |
 
 > **SAM2.1 為實驗性功能。** 每張影像只回傳**一個遮罩**（最高分點），
 > 不適用於多物件或空景場景。
@@ -167,26 +168,28 @@ python scripts/batch_annotate.py --project-id 1 --resume
 GET  /                      → HTML 表單
 POST /batch                 → 啟動批次，回傳 {"job_id": "..."}
 GET  /batch/{job_id}/status → 輪詢進度與日誌
+POST /batch/{job_id}/stop  → 終止執行中的批次作業
 GET  /health                → {"status": "ok"}
 ```
+
+![batch-annotation-ui](../image/batch-annotation-ui.png)
 
 **Web UI 表單欄位說明：**
 
 | 欄位 | 說明 |
 |---|---|
-| Project ID | Label Studio 專案 ID（必填）|
-| ML Backend URL | ML 後端端點（預設：`http://sam3-image-backend:9090`）|
-| Backend | SAM3（建議）或 SAM2.1（實驗性）|
-| SAM2.1 Mode | SAM2.1 專用；選 `grid`（3×3 格點）|
-| Confidence | SAM3 信心閾值（預設 0.5）|
+| Project ID | Label Studio 專案 ID（可從 URL `/projects/{id}` 取得，必填）|
+| Backend | SAM3（建議，使用文字提示）或 SAM2.1（實驗性，使用格點幾何）|
+| ML Backend URL | ML 後端 `/predict` 端點完整 URL（預設指向 Docker Compose 服務名稱）|
+| Text Prompt | 自由文字描述欲分割的物件（例：`cow, grass, fence`）。SAM3 將此作為唯一輸入上下文。SAM3 必填；SAM2.1 忽略 |
+| SAM2.1 Mode | 僅選擇 SAM2.1 時顯示。`grid` 對每張影像送出 3×3 格點 (不推薦) |
+| Confidence | 分數閾值（0–1）。低於此值的預測會被捨棄。降低可取得更多遮罩，但可能包含雜訊 |
 | Max tasks | 限制處理任務數（留空代表全部）|
-| Dry run | 演習模式，不實際標注 |
-| Force | 對已有人工標注的任務也寫入預測 |
-| Confirm-force | 使用 Force 時必須同時勾選 |
-| ML Basic Auth User | ML 後端 HTTP Basic Auth 帳號（選填）|
-| ML Basic Auth Pass | ML 後端 HTTP Basic Auth 密碼（選填）|
-
-ML Basic Auth 憑證對應 `.env.ml` 中的 `BASIC_AUTH_USER` / `BASIC_AUTH_PASS`。
+| Task IDs | 指定僅處理特定的 Task ID（逗號分隔，例：`1, 3, 17`）。若填寫，過濾條件優先於 `Max tasks` |
+| Dry run | 演習模式：不呼叫 ML 後端，不寫入預測。用於確認任務數量與設定 |
+| Force overwrite | 對已有人工標注的任務也寫入預測（預測與現有標注**並存**，不會刪除任何人工標注）|
+| Auth (Username / Password) | ML 後端 HTTP Basic Auth 帳密（選填）。對應 `.env.ml` 中的 `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` |
+| Stop 按鈕 | 終止執行中的作業（先送 SIGTERM，5 秒後 SIGKILL）。僅在作業執行中時顯示 |
 
 ---
 

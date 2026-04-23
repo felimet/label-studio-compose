@@ -50,6 +50,8 @@ def call_predict(
     ml_backend_url: str,
     task: dict,
     context: dict,
+    label_config: str,
+    project_id: int,
     basic_auth: tuple[str, str] | None = None,
 ) -> tuple[str, list, float]:
     """Call ML backend /predict endpoint.
@@ -59,10 +61,18 @@ def call_predict(
       'zero_match'    — HTTP 200, predictions=[]
       'protocol_fail' — HTTP 4xx/5xx or network error
     score defaults to 0.0 on failure or missing field.
+
+    Payload format must match label_studio_ml SDK _predict() expectations:
+      - label_config and project at root level
+      - context nested inside params dict
     """
     payload = {
         "tasks": [{"id": task["id"], "data": task.get("data", {})}],
-        "context": context,
+        "label_config": label_config,
+        "project": f"{project_id}.0",
+        "params": {
+            "context": context,
+        },
     }
     try:
         resp = requests.post(
@@ -72,9 +82,15 @@ def call_predict(
             auth=basic_auth or None,
         )
     except Exception as exc:
+        print(f"    predict network error: {exc}", file=sys.stderr)
         return "protocol_fail", [], 0.0
 
     if resp.status_code >= 400:
+        body_preview = resp.text[:500] if resp.text else "(empty)"
+        print(
+            f"    predict HTTP {resp.status_code}: {body_preview}",
+            file=sys.stderr,
+        )
         return "protocol_fail", [], 0.0
 
     data = resp.json()
@@ -155,12 +171,22 @@ def pre_flight_check(
     label_config: str = project.get("label_config", "") or ""
     label_names = extract_label_names(label_config)
 
-    if not label_names:
+    # SAM3: --text-prompt is mandatory
+    if args.backend == "sam3" and not args.text_prompt:
         print(
-            "WARN: No <Label value> found in project labeling config. "
-            "SAM3 context will be empty.",
+            "ERROR: --backend sam3 requires --text-prompt. "
+            "Provide a free-form text prompt describing what to segment.",
             file=sys.stderr,
         )
+        sys.exit(3)
+
+    if args.backend == "sam3":
+        if not label_names:
+            print(
+                "WARN: No <Label value> found in project labeling config. "
+                "Brush output label will use BrushLabels fallback.",
+                file=sys.stderr,
+            )
 
     # SAM2.1 validation: must have --sam21-mode grid
     if args.backend == "sam21":
@@ -272,6 +298,17 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="HTTP Basic Auth password for ML backend (leave empty to disable)",
     )
+    p.add_argument(
+        "--text-prompt",
+        default="",
+        help="Free-form text prompt for SAM3 (required for --backend sam3). "
+             "Describes what objects to segment, e.g. 'cow, grass, fence'.",
+    )
+    p.add_argument(
+        "--task-ids",
+        default="",
+        help="Comma-separated block of task IDs to process exclusively (e.g. '1, 3, 17').",
+    )
     return p.parse_args()
 
 
@@ -279,6 +316,7 @@ def process_task(
     task: dict,
     args,
     label_names: list[str],
+    label_config: str,
     model_version: str,
     ls: LabelStudioAPI,
     basic_auth: tuple[str, str] | None = None,
@@ -291,8 +329,12 @@ def process_task(
         if not (args.force and args.confirm_force):
             return task_id, "skip_human"
 
-    context = build_context(args.backend, label_names, args)
-    status, result, score = call_predict(args.backend_url, task, context, basic_auth)
+    context = build_context(
+        args.backend, label_names, args, text_prompt=args.text_prompt
+    )
+    status, result, score = call_predict(
+        args.backend_url, task, context, label_config, args.project_id, basic_auth
+    )
 
     if status == "protocol_fail":
         return task_id, "fail"
@@ -328,7 +370,7 @@ def main() -> None:
         else None
     )
 
-    label_names, _ = pre_flight_check(ls, args.backend_url, args.project_id, args)
+    label_names, label_config = pre_flight_check(ls, args.backend_url, args.project_id, args)
 
     model_version = (
         CLI_MODEL_VERSION_SAM3 if args.backend == "sam3" else CLI_MODEL_VERSION_SAM21
@@ -364,6 +406,15 @@ def main() -> None:
     # Apply resume filter
     if resume_from is not None:
         all_tasks = [t for t in all_tasks if t["id"] > resume_from]
+
+    # Apply task-ids filter
+    if args.task_ids:
+        try:
+            target_ids = {int(x.strip()) for x in args.task_ids.split(",") if x.strip()}
+            all_tasks = [t for t in all_tasks if t["id"] in target_ids]
+        except ValueError:
+            print("ERROR: --task-ids must be a comma-separated list of integers.", file=sys.stderr)
+            sys.exit(3)
 
     # Apply max-tasks limit
     if args.max_tasks is not None:
@@ -419,7 +470,7 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = {
             executor.submit(
-                process_task, task, args, label_names, model_version, ls, basic_auth
+                process_task, task, args, label_names, label_config, model_version, ls, basic_auth
             ): task["id"]
             for task in all_tasks
         }

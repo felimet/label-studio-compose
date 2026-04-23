@@ -13,7 +13,7 @@ from scripts.utils.context_builder import (
 
 
 def test_sam3_context_format():
-    ctx = build_sam3_text_context(["cow", "sheep"])
+    ctx = build_sam3_text_context("cow, sheep")
     items = ctx["result"]
     text_items = [i for i in items if i["from_name"] == "text_prompt"]
     assert len(text_items) == 1
@@ -24,7 +24,7 @@ def test_sam3_context_format():
 
 
 def test_sam3_confidence_injection():
-    ctx = build_sam3_text_context(["cow"], confidence=0.7)
+    ctx = build_sam3_text_context("cow", confidence=0.7)
     items = ctx["result"]
     threshold_items = [i for i in items if i["from_name"] == "confidence_threshold"]
     assert len(threshold_items) == 1
@@ -33,7 +33,7 @@ def test_sam3_confidence_injection():
 
 
 def test_sam3_default_confidence_omitted():
-    ctx = build_sam3_text_context(["cow"], confidence=0.5)
+    ctx = build_sam3_text_context("cow", confidence=0.5)
     from_names = [i["from_name"] for i in ctx["result"]]
     assert "confidence_threshold" not in from_names
 

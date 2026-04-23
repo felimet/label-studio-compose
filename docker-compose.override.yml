@@ -12,6 +12,9 @@ services:
     environment:
       - DJANGO_LOG_LEVEL=INFO
       - LOG_LEVEL=INFO
+  batch-server:
+    ports:
+      - "18085:8085"
 
   minio:
     ports:
