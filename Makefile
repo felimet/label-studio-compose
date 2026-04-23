@@ -12,9 +12,10 @@
 		supabase-standalone-up supabase-standalone-down supabase-standalone-logs \
 		supabase-sample-up supabase-sample-down supabase-sample-logs \
 		check-core-env check-supabase-standalone-env check-supabase-sample-env check-tools-env check-ls-supavisor-user-format check-postgrest-schema-exposure \
-	tools-up tools-down tools-logs \
+		tools-up tools-down tools-logs \
         init-minio health create-admin reset-password \
-        push
+        push \
+        batch-annotate batch-server
 
 # ─── Core stack ─────────────────────────────────────────────
 CORE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME)
@@ -173,6 +174,21 @@ reset-password:
 # ─── Health check ────────────────────────────────────────────
 health:
 	@bash -lc 'COMPOSE_PROJECT_NAME="$(STACK_PROJECT_NAME)" bash scripts/healthcheck.sh'
+
+# ─── Batch Annotation ────────────────────────────────────────
+batch-annotate: check-core-env
+	@[ -n "$(PROJECT_ID)" ] || (echo "Usage: make batch-annotate PROJECT_ID=<id> [BACKEND=sam3|sam21]"; exit 1)
+	LABEL_STUDIO_API_KEY=$$(grep '^LABEL_STUDIO_API_KEY=' .env | cut -d= -f2-) \
+	  python scripts/batch_annotate.py \
+	    --project-id $(PROJECT_ID) \
+	    --backend $(or $(BACKEND),sam3) \
+	    --ls-url $$(grep '^LABEL_STUDIO_EXTERNAL_URL=' .env | cut -d= -f2- || echo http://localhost:8080) \
+	    $(if $(CONFIDENCE),--confidence $(CONFIDENCE),) \
+	    $(if $(MAX_TASKS),--max-tasks $(MAX_TASKS),) \
+	    $(if $(DRY_RUN),--dry-run,)
+
+batch-server:
+	$(CORE_COMPOSE) up -d --build batch-server
 
 # ─── Git ─────────────────────────────────────────────────────
 push:

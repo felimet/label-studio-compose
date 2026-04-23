@@ -1,4 +1,4 @@
-﻿# label-anything-sam
+# label-anything-sam
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 ![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
@@ -206,6 +206,27 @@ Supabase mode boundaries:
 - `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`: Run ML backend tests
 - `make init-minio`: One-time bucket and service-account initialization
 - `make health`: End-to-end health checks
+
+## Batch Annotation
+
+Run SAM3 or SAM2.1 inference on an entire Label Studio project in one command —
+from the CLI or from a browser-based Web UI (no terminal required).
+
+```bash
+# CLI: annotate all tasks in project 1 with SAM3
+python scripts/batch_annotate.py --project-id 1 --backend sam3 \
+    --text-prompt "cow, grass, fence"
+# or
+make batch-annotate PROJECT_ID=1
+
+# Web UI: open http://<your-server>:8085 in a browser
+make batch-server
+```
+
+![batch-annotation-ui](image/batch-annotation-ui.png)
+
+See [docs/batch-annotation.md](docs/batch-annotation.md) for full CLI reference,
+SAM3 vs SAM2.1 comparison, concurrency settings, and Web UI deployment.
 
 ## Label Studio Annotation UI (SAM3-image)
 

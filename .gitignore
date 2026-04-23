@@ -12,6 +12,7 @@
 
 # Documentation
 ONBOARDING.md
+*graphify*
 
 # Runtime data volumes
 data/
@@ -48,6 +49,9 @@ venv/
 
 # Node / frontend
 node_modules/
+
+# Batch annotation resume state (local only, excluded from PR diffs)
+scripts/.batch_resume.json
 
 # OS
 .DS_Store
