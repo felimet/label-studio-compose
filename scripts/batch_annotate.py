@@ -50,6 +50,7 @@ def call_predict(
     ml_backend_url: str,
     task: dict,
     context: dict,
+    basic_auth: tuple[str, str] | None = None,
 ) -> tuple[str, list, float]:
     """Call ML backend /predict endpoint.
 
@@ -68,6 +69,7 @@ def call_predict(
             f"{ml_backend_url.rstrip('/')}/predict",
             json=payload,
             timeout=(5, 120),
+            auth=basic_auth or None,
         )
     except Exception as exc:
         return "protocol_fail", [], 0.0
@@ -260,6 +262,16 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="SAM2.1 grid edge length (default: 3, i.e. 3×3=9 points)",
     )
+    p.add_argument(
+        "--basic-auth-user",
+        default="",
+        help="HTTP Basic Auth username for ML backend (leave empty to disable)",
+    )
+    p.add_argument(
+        "--basic-auth-pass",
+        default="",
+        help="HTTP Basic Auth password for ML backend (leave empty to disable)",
+    )
     return p.parse_args()
 
 
@@ -269,6 +281,7 @@ def process_task(
     label_names: list[str],
     model_version: str,
     ls: LabelStudioAPI,
+    basic_auth: tuple[str, str] | None = None,
 ) -> tuple[int, str]:
     """Process a single task. Returns (task_id, status)."""
     task_id = task["id"]
@@ -279,7 +292,7 @@ def process_task(
             return task_id, "skip_human"
 
     context = build_context(args.backend, label_names, args)
-    status, result, score = call_predict(args.backend_url, task, context)
+    status, result, score = call_predict(args.backend_url, task, context, basic_auth)
 
     if status == "protocol_fail":
         return task_id, "fail"
@@ -309,6 +322,11 @@ def main() -> None:
 
     api_key = load_api_key()
     ls = LabelStudioAPI(args.ls_url, api_key)
+    basic_auth: tuple[str, str] | None = (
+        (args.basic_auth_user, args.basic_auth_pass)
+        if args.basic_auth_user
+        else None
+    )
 
     label_names, _ = pre_flight_check(ls, args.backend_url, args.project_id, args)
 
@@ -401,7 +419,7 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = {
             executor.submit(
-                process_task, task, args, label_names, model_version, ls
+                process_task, task, args, label_names, model_version, ls, basic_auth
             ): task["id"]
             for task in all_tasks
         }

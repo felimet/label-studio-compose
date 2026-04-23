@@ -11,38 +11,19 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import hmac
 import os
 import subprocess
 import sys
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 app = FastAPI(title="Batch Annotation Server", version="1.0.0")
 
 # In-memory job registry (lost on restart — acceptable, jobs complete in minutes)
 _jobs: dict[str, dict] = {}
-
-
-# ── Auth ─────────────────────────────────────────────────────────────────
-
-
-def _check_api_key(request: Request) -> None:
-    required_key = os.environ.get("BATCH_SERVER_API_KEY", "")
-    if not required_key:
-        return  # No key configured — open for local dev
-    provided = request.headers.get("X-API-Key", "")
-    if not hmac.compare_digest(provided, required_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key header",
-        )
-
-
-AuthDep = Annotated[None, Depends(_check_api_key)]
 
 
 # ── Output collector ─────────────────────────────────────────────────────
@@ -71,16 +52,7 @@ async def health() -> JSONResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(_auth: AuthDep = None) -> HTMLResponse:
-    api_key_required = bool(os.environ.get("BATCH_SERVER_API_KEY"))
-    key_row = ""
-    if api_key_required:
-        key_row = """
-        <tr>
-          <td><label for="api_key">X-API-Key</label></td>
-          <td><input type="password" id="api_key" name="api_key" style="width:100%"></td>
-        </tr>"""
-
+async def index() -> HTMLResponse:
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -107,6 +79,11 @@ async def index(_auth: AuthDep = None) -> HTMLResponse:
       <tr>
         <td><label for="project_id">Project ID *</label></td>
         <td><input type="number" id="project_id" name="project_id" required min="1"></td>
+      </tr>
+      <tr>
+        <td><label for="ml_backend_url">ML Backend URL *</label></td>
+        <td><input type="url" id="ml_backend_url" name="ml_backend_url" required
+                   value="http://sam3-image-backend:9090" style="width:100%"></td>
       </tr>
       <tr>
         <td><label for="backend">Backend</label></td>
@@ -145,7 +122,15 @@ async def index(_auth: AuthDep = None) -> HTMLResponse:
           <label><input type="checkbox" name="confirm_force" value="1"> Confirm-force</label>
         </td>
       </tr>
-      {key_row}
+      <tr>
+        <td><label for="basic_auth_user">ML Basic Auth User</label></td>
+        <td><input type="text" id="basic_auth_user" name="basic_auth_user"
+                   placeholder="(leave empty if not required)"></td>
+      </tr>
+      <tr>
+        <td><label for="basic_auth_pass">ML Basic Auth Pass</label></td>
+        <td><input type="password" id="basic_auth_pass" name="basic_auth_pass"></td>
+      </tr>
     </table>
     <button type="submit">Start Batch</button>
   </form>
@@ -203,6 +188,7 @@ async def index(_auth: AuthDep = None) -> HTMLResponse:
 @app.post("/batch")
 async def start_batch(
     project_id: Annotated[int, Form()],
+    ml_backend_url: Annotated[str, Form()],
     backend: Annotated[str, Form()] = "sam3",
     sam21_mode: Annotated[str, Form()] = "",
     confidence: Annotated[float, Form()] = 0.5,
@@ -210,7 +196,8 @@ async def start_batch(
     dry_run: Annotated[str, Form()] = "",
     force: Annotated[str, Form()] = "",
     confirm_force: Annotated[str, Form()] = "",
-    _auth: AuthDep = None,
+    basic_auth_user: Annotated[str, Form()] = "",
+    basic_auth_pass: Annotated[str, Form()] = "",
 ) -> JSONResponse:
     # Validate LABEL_STUDIO_API_KEY present before spawning
     if not os.environ.get("LABEL_STUDIO_API_KEY"):
@@ -225,7 +212,7 @@ async def start_batch(
         "--project-id", str(project_id),
         "--backend", backend,
         "--ls-url", os.environ.get("LABEL_STUDIO_URL", "http://localhost:8080"),
-        "--backend-url", os.environ.get("ML_BACKEND_URL", "http://localhost:9090"),
+        "--backend-url", ml_backend_url,
     ]
 
     if backend == "sam21" and sam21_mode == "grid":
@@ -240,6 +227,8 @@ async def start_batch(
         cmd.append("--force")
     if confirm_force:
         cmd.append("--confirm-force")
+    if basic_auth_user:
+        cmd += ["--basic-auth-user", basic_auth_user, "--basic-auth-pass", basic_auth_pass]
 
     # LABEL_STUDIO_API_KEY inherited from env — never exposed in cmd args
     env = {**os.environ}

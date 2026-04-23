@@ -214,9 +214,6 @@ services:
     environment:
       - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY}
       - LABEL_STUDIO_URL=http://label-studio:8080
-      - ML_BACKEND_URL=${ML_BACKEND_URL:-http://sam3-image-backend:9090}
-      # Optional: set to require X-API-Key header on all requests
-      - BATCH_SERVER_API_KEY=${BATCH_SERVER_API_KEY:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8085/health')\""]
       interval: 30s
