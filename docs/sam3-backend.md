@@ -99,7 +99,7 @@ Settings → Labeling Interface → Code → 貼上 XML
 ### Predict 路徑
 
 <!-- AUTO-GENERATED from ml-backends/sam3-image/model.py -->
-**Last Updated:** 2026-04-17 (v1.1.2)
+**Last Updated:** 2026-04-17 (v1.1.3)
 
 推論路徑由 context 中提示類型動態決定，優先順序由上而下：
 
