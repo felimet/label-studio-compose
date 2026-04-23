@@ -13,3 +13,6 @@ einops>=0.8.0          # required by SAM3 ViT positional encoding
 torchvision>=0.22.0    # required by Sam3Processor (torchvision.transforms.v2)
 iopath>=0.1.10         # required by sam3.model_builder (iopath.common.file_io)
 pycocotools>=2.0.6     # transitive dep of sam3.train.data.coco_json_loaders (needed at import time)
+
+# SAM3 Agent requirements
+openai>=1.0.0          # required for SAM3 Agent LLM interaction

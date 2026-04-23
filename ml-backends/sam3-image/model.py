@@ -160,6 +160,12 @@ APPLY_THRESHOLD_GLOBALLY: bool = os.getenv("SAM3_APPLY_THRESHOLD_GLOBALLY", "tru
 # Final box size is (2 * SAM3_POINT_FALLBACK_HALF_SIZE) in each dimension.
 POINT_FALLBACK_HALF_SIZE: float = float(os.getenv("SAM3_POINT_FALLBACK_HALF_SIZE", "0.005"))
 
+# ── SAM3 Agent Configuration ───────────────────────────────────────────────────
+AGENT_ENABLED: bool = os.getenv("SAM3_AGENT_ENABLED", "false").lower() == "true"
+AGENT_LLM_URL: str = os.getenv("SAM3_AGENT_LLM_URL", "http://localhost:8000/v1/chat/completions")
+AGENT_LLM_KEY: str = os.getenv("SAM3_AGENT_LLM_KEY", "")
+AGENT_MODEL_NAME: str = os.getenv("SAM3_AGENT_MODEL_NAME", "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8")
+
 # ── CUDA optimisations ─────────────────────────────────────────────────────────
 # Deferred to _ensure_loaded() — after gunicorn fork — so CUDA is never
 # initialised in the master process.  Do NOT call get_device_properties() here.
@@ -870,6 +876,25 @@ class NewModel(LabelStudioMLBase):
         image = np.array(pil_img)
 
         # ── Run predictor ──────────────────────────────────────────────────────
+        # If Agent is enabled, and there's a text prompt but no manual geometric hints, use the agent
+        if AGENT_ENABLED and text_prompt and not point_coords and not input_boxes:
+            try:
+                return self._predict_sam3_agent(
+                    img_path,
+                    text_prompt,
+                    selected_label,
+                    image_width,
+                    image_height,
+                    from_name,
+                    to_name,
+                    confidence_threshold=confidence_threshold,
+                    selection_mode=selection_mode,
+                    apply_threshold_globally=effective_apply_threshold_globally,
+                    max_returned_masks=max_returned_masks,
+                )
+            except Exception as exc:
+                logger.error("SAM3 Agent prediction failed, falling back to basic text prompting: %s", exc, exc_info=True)
+
         # All paths go through Sam3Processor (text, geo-only, text+geo).
         try:
             return self._predict_sam3(
@@ -949,6 +974,192 @@ class NewModel(LabelStudioMLBase):
         return selected
 
     # ── SAM3 path ──────────────────────────────────────────────────────────────
+
+    def _predict_sam3_agent(
+        self,
+        img_path: str,
+        text_prompt: str,
+        selected_label: Optional[str],
+        image_width: int,
+        image_height: int,
+        from_name: str,
+        to_name: str,
+        *,
+        confidence_threshold: float,
+        selection_mode: str,
+        apply_threshold_globally: bool,
+        max_returned_masks: int,
+    ) -> ModelResponse:
+        """Run SAM3 Agentic logic based on Llama / vLLM reasoning."""
+        import tempfile
+        import json
+        from sam3.agent.agent_core import agent_inference
+        from sam3.agent.client_llm import send_generate_request
+        from sam3.model.box_ops import box_xyxy_to_xywh
+        from sam3.train.masks_ops import robust_rle_encode
+        from copy import deepcopy
+
+        def agent_send_generate_request(messages):
+            return send_generate_request(
+                messages,
+                server_url=AGENT_LLM_URL,
+                model=AGENT_MODEL_NAME,
+                api_key=AGENT_LLM_KEY,
+                max_tokens=2048,
+            )
+
+        def agent_call_sam_service(image_path: str, text_prompt: str, output_folder_path: str = "sam_agent_cache"):
+            """Local SAM service adapter for the agent that bypasses network requests."""
+            logger.info("Agent requesting SAM3 for text prompt: %s", text_prompt)
+            pil_img = Image.open(image_path).convert("RGB")
+            orig_img_w, orig_img_h = pil_img.size
+
+            # Run inference natively
+            inference_state = self._processor.set_image(pil_img)
+            inference_state = self._processor.set_text_prompt(state=inference_state, prompt=text_prompt)
+
+            pred_boxes_xyxy = torch.stack([
+                inference_state["boxes"][:, 0] / orig_img_w,
+                inference_state["boxes"][:, 1] / orig_img_h,
+                inference_state["boxes"][:, 2] / orig_img_w,
+                inference_state["boxes"][:, 3] / orig_img_h,
+            ], dim=-1)
+            pred_boxes_xywh = box_xyxy_to_xywh(pred_boxes_xyxy).tolist()
+            
+            # Agent expects COCO RLE with 'counts' property unraveled
+            pred_masks_rle = robust_rle_encode(inference_state["masks"].squeeze(1))
+            pred_masks_counts = [m["counts"] for m in pred_masks_rle]
+
+            outputs = {
+                "orig_img_h": orig_img_h,
+                "orig_img_w": orig_img_w,
+                "pred_boxes": pred_boxes_xywh,
+                "pred_masks": pred_masks_counts,
+                "pred_scores": inference_state["scores"].tolist(),
+                "original_image_path": image_path,
+            }
+
+            # Pre-filter by valid lengths as client_sam3 does
+            valid_masks, valid_boxes, valid_scores = [], [], []
+            for i, rle_str in enumerate(outputs["pred_masks"]):
+                if len(rle_str) > 4:
+                    valid_masks.append(rle_str)
+                    valid_boxes.append(outputs["pred_boxes"][i])
+                    valid_scores.append(outputs["pred_scores"][i])
+            outputs["pred_masks"] = valid_masks
+            outputs["pred_boxes"] = valid_boxes
+            outputs["pred_scores"] = valid_scores
+
+            # Save to temporary JSON for agent_inference to read
+            os.makedirs(output_folder_path, exist_ok=True)
+            tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=output_folder_path, delete=False)
+            
+            # The agent expects output_image_path to be in the JSON
+            # so it can load the image with the highlighted masks to reason.
+            tf_img = tempfile.NamedTemporaryFile(mode="wb", suffix=".png", dir=output_folder_path, delete=False)
+            outputs["output_image_path"] = tf_img.name
+            tf_img.close()
+            
+            from sam3.agent.viz import visualize
+            viz_image = visualize(outputs)
+            viz_image.save(outputs["output_image_path"])
+
+            json.dump(outputs, tf)
+            tf.close()
+            return tf.name
+
+        ctx = torch.autocast(**_autocast_kwargs) if _autocast_kwargs else None
+        if ctx:
+            ctx.__enter__()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                agent_history, final_output_dict, _ = agent_inference(
+                    img_path,
+                    text_prompt,
+                    send_generate_request=agent_send_generate_request,
+                    call_sam_service=agent_call_sam_service,
+                    output_dir=temp_dir,
+                    debug=False,
+                )
+
+                if "pred_scores" not in final_output_dict or not final_output_dict["pred_scores"]:
+                    return ModelResponse(predictions=[])
+
+                # Convert outputs back to Label Studio responses
+                import pycocotools.mask as maskUtils
+                from label_studio_converter import brush
+
+                pred_scores = np.array(final_output_dict["pred_scores"])
+                pred_masks_encoded = final_output_dict["pred_masks"] # These are raw counts strings
+
+                # Since we don't have the size stored directly in pred_masks array from agent,
+                # we must reconstruct the COCO dictionary to decode it
+                results = []
+                # Find which indices to select
+                n_total = len(pred_scores)
+                # Apply same threshold logic
+                selected_indices = []
+                for i in range(n_total):
+                    if pred_scores[i] >= confidence_threshold:
+                        selected_indices.append(i)
+                if not selected_indices and n_total > 0:
+                    selected_indices = [np.argmax(pred_scores)] # fallback to best if available
+
+                # We map selected indices through Agent, we don't use max_returned_masks necessarily
+                # wait, let's use the identical mask filtering logic if requested
+                selected_indices_to_use = self._select_mask_indices(
+                    scores_tensor=pred_scores,
+                    n_total=n_total,
+                    has_text=True,
+                    has_geo=False,
+                    selection_mode=selection_mode,
+                    min_return_score=confidence_threshold if apply_threshold_globally else MIN_RETURN_SCORE,
+                    max_returned_masks=max_returned_masks,
+                )
+
+                for idx in selected_indices_to_use:
+                    score = float(pred_scores[idx])
+                    coco_rle = {
+                        "size": [image_height, image_width],
+                        "counts": pred_masks_encoded[idx],
+                    }
+                    if isinstance(coco_rle["counts"], str):
+                        coco_rle["counts"] = coco_rle["counts"].encode("utf-8")
+                    
+                    binary_mask = maskUtils.decode(coco_rle)
+                    # Label studio formatting
+                    ls_rle = brush.mask2rle(binary_mask * 255)
+                    results.append({
+                        "from_name": from_name,
+                        "to_name": to_name,
+                        "original_width": image_width,
+                        "original_height": image_height,
+                        "image_rotation": 0,
+                        "value": {
+                            "format": "rle",
+                            "rle": ls_rle,
+                            "brushlabels": [selected_label] if selected_label else [],
+                        },
+                        "score": score,
+                        "type": "brushlabels",
+                        "readonly": False,
+                    })
+
+                logger.info("SAM3 Agent completed. Found %d masks (kept %d) using Llama reasoning.", n_total, len(results))
+                return ModelResponse(predictions=[{
+                    "result": results,
+                    "model_version": self.model_version + "-agent",
+                }])
+
+            except Exception as e:
+                logger.error("Error in agent inner predict: %s", str(e), exc_info=True)
+                raise
+            finally:
+                if ctx:
+                    ctx.__exit__(None, None, None)
+
+    # ── SAM3 native path ───────────────────────────────────────────────────────
 
     def _predict_sam3(
         self,
