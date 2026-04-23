@@ -15,16 +15,16 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 > [!NOTE]
 > Version guidance:
 >
-> - `v1.0.2` is the latest stable release of the native PostgreSQL line (no Supabase required).
+> - `v1.0.3` is the latest stable release of the native PostgreSQL line (no Supabase required).
 >   It includes all SAM3 fixes and enhancements: native point embeddings (image + video),
 >   mask selection modes (`adaptive`/`top1`/`topk`/`threshold`/`all`), runtime threshold and
 >   selection-mode UI overrides, bidirectional video tracking, multi-object track merging,
 >   and dual text-prompt fields (pure vs mixed-use).
-> - For the Supabase-integrated line, use `main` or release `v1.1.2`.
+> - For the Supabase-integrated line, use `main` or release `v1.1.3`.
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.0.2 -b local-v1-native-pg
+> git checkout tags/v1.0.3 -b local-v1-native-pg
 > ```
 
 ## 5-Minute Quick Start

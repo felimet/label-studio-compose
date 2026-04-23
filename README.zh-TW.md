@@ -15,16 +15,16 @@ English version: [README.md](README.md)
 > [!NOTE]
 > 版本使用建議：
 >
-> - `v1.0.2` 是原生 PostgreSQL 線（無需 Supabase）的最新穩定版本，
+> - `v1.0.3` 是原生 PostgreSQL 線（無需 Supabase）的最新穩定版本，
 >   包含所有 SAM3 修正與強化：影像 + 影片原生 point embedding、
 >   遮罩選擇模式（`adaptive`/`top1`/`topk`/`threshold`/`all`）、
 >   執行期門檻與選擇模式 UI 覆蓋、雙向影片追蹤、多物件 track 合併、
 >   純文字 / 混合用途雙提示欄位。
-> - 若需要 Supabase 整合版本，請使用 `main` 或 `v1.1.2`。
+> - 若需要 Supabase 整合版本，請使用 `main` 或 `v1.1.3`。
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.0.2 -b local-v1-native-pg
+> git checkout tags/v1.0.3 -b local-v1-native-pg
 > ```
 
 ## 5 分鐘快速開始
