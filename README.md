@@ -207,6 +207,24 @@ Supabase mode boundaries:
 - `make init-minio`: One-time bucket and service-account initialization
 - `make health`: End-to-end health checks
 
+## Batch Annotation
+
+Run SAM3 or SAM2.1 inference on an entire Label Studio project in one command —
+from the CLI or from a browser-based Web UI (no terminal required).
+
+```bash
+# CLI: annotate all tasks in project 1 with SAM3
+python scripts/batch_annotate.py --project-id 1 --backend sam3
+# or
+make batch-annotate PROJECT_ID=1
+
+# Web UI: open http://<your-server>:8085 in a browser
+make batch-server
+```
+
+See [docs/batch-annotation.md](docs/batch-annotation.md) for full CLI reference,
+SAM3 vs SAM2.1 comparison, concurrency settings, and Web UI deployment.
+
 ## Label Studio Annotation UI (SAM3-image)
 
 ![ann-ui](image/ann-ui.png)

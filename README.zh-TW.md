@@ -208,6 +208,23 @@ Supabase 模式邊界：
 - `make init-minio`：首次建立 bucket 與 service account
 - `make health`：全棧健康檢查
 
+## 批量標注
+
+一行指令對整個 Label Studio 專案執行 SAM3/SAM2.1 推論，支援 CLI 與瀏覽器 Web UI（無需終端機）。
+
+```bash
+# CLI：對 project 1 執行 SAM3 批量標注
+python scripts/batch_annotate.py --project-id 1 --backend sam3
+# 或
+make batch-annotate PROJECT_ID=1
+
+# Web UI：瀏覽器開啟 http://<your-server>:8085
+make batch-server
+```
+
+完整 CLI 參數說明、SAM3 vs SAM2.1 差異、並發設定與 Web UI 部署，請參閱
+[docs/batch-annotation.md](docs/batch-annotation.md)。
+
 ## Label Studio Annotation UI (SAM3-image)
 
 ![ann-ui](image/ann-ui.png)
