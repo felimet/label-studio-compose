@@ -69,6 +69,15 @@ make tools-up
 # 4) Supabase management command aliases
 # (already started in step 1 for default DB route)
 # make supabase-up / make supabase-down / make supabase-logs
+
+# 5) Optional SAM3 Agent (LLM-assisted mask selection for SAM3 backend)
+cp .env.sam3_agent.example .env.sam3_agent
+# Set SAM3_AGENT_ENABLED=true and configure LLM endpoint (URL / KEY / MODEL)
+# All supported providers (vLLM, Ollama, OpenAI, Gemini, Groq, etc.) are documented
+# in .env.sam3_agent.example. The LLM MUST support vision (multimodal) input.
+
+make up-sam3-agent
+# To apply LLM config changes without rebuilding: make restart-sam3-agent
 ```
 
 Overlay minimal example for Label Studio integration (NOT part of this branch runtime flow):

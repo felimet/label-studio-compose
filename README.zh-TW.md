@@ -69,6 +69,15 @@ make tools-up
 # 4) Supabase 管理指令別名
 # （步驟 1 已先啟動，確保預設 DB 路徑可用）
 # make supabase-up / make supabase-down / make supabase-logs
+
+# 5) 可選 SAM3 Agent（LLM 輔助遮罩選擇，SAM3 後端專用）
+cp .env.sam3_agent.example .env.sam3_agent
+# 設定 SAM3_AGENT_ENABLED=true 並填入 LLM 端點（URL / KEY / MODEL）
+# 各支援平台範例（vLLM、Ollama、OpenAI、Gemini、Groq 等）詳見 .env.sam3_agent.example
+# LLM 必須具備視覺（multimodal）能力
+
+make up-sam3-agent
+# 若只變更 LLM 設定，無需重建映像：make restart-sam3-agent
 ```
 
 供 Label Studio 使用的示例模式最小集合（不納入本分支運作流程）：
