@@ -15,16 +15,16 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 > [!NOTE]
 > Version guidance:
 >
-> - `v1.0.2` is the latest stable release of the native PostgreSQL line (no Supabase required).
+> - `v1.0.4` is the latest stable release of the native PostgreSQL line (no Supabase required).
 >   It includes all SAM3 fixes and enhancements: native point embeddings (image + video),
 >   mask selection modes (`adaptive`/`top1`/`topk`/`threshold`/`all`), runtime threshold and
 >   selection-mode UI overrides, bidirectional video tracking, multi-object track merging,
->   and dual text-prompt fields (pure vs mixed-use).
-> - For the Supabase-integrated line, use `main` or release `v1.1.2`.
+>   dual text-prompt fields (pure vs mixed-use), and optional SAM3 Agent (LLM-assisted mask selection).
+> - For the Supabase-integrated line, use `main` or release `v1.1.4`.
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.0.2 -b local-v1-native-pg
+> git checkout tags/v1.0.4 -b local-v1-native-pg
 > ```
 
 ## 5-Minute Quick Start
@@ -46,6 +46,15 @@ cp .env.ml.example .env.ml
 # Set LABEL_STUDIO_API_KEY (Legacy Token) and HF_TOKEN
 
 make ml-up
+
+# 3) Optional SAM3 Agent (LLM-assisted mask selection for SAM3 backend)
+cp .env.sam3_agent.example .env.sam3_agent
+# Set SAM3_AGENT_ENABLED=true and configure LLM endpoint (URL / KEY / MODEL)
+# All supported providers (vLLM, Ollama, OpenAI, Gemini, Groq, etc.) are documented
+# in .env.sam3_agent.example. The LLM MUST support vision (multimodal) input.
+
+make up-sam3-agent
+# To apply LLM config changes without rebuilding: make restart-sam3-agent
 ```
 
 Open:

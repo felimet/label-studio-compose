@@ -6,6 +6,7 @@ from .constants import SAM3_PURE_TEXT_FROM_NAME
 def build_sam3_text_context(
     text_prompt: str,
     confidence: float = 0.5,
+    agent_enabled: bool | None = None,
 ) -> dict:
     """Build SAM3 pure-text context for batch annotation.
 
@@ -37,6 +38,15 @@ def build_sam3_text_context(
             "value": {"text": [str(confidence)]},
         }
     )
+    if agent_enabled is not None:
+        results.append(
+            {
+                "type": "textarea",
+                "from_name": "agent_enabled",
+                "to_name": "image",
+                "value": {"text": ["true" if agent_enabled else "false"]},
+            }
+        )
     return {"result": results}
 
 
@@ -93,6 +103,7 @@ def build_context(
     label_names: list[str],
     args,
     text_prompt: str = "",
+    agent_enabled: bool | None = None,
 ) -> dict:
     """Dispatch to the correct context builder based on --backend.
 
@@ -102,7 +113,7 @@ def build_context(
     --backend sam21 without --sam21-mode grid is caught at pre-flight (exit 3).
     """
     if backend == "sam3":
-        return build_sam3_text_context(text_prompt, confidence=args.confidence)
+        return build_sam3_text_context(text_prompt, confidence=args.confidence, agent_enabled=agent_enabled)
     elif backend == "sam21" and getattr(args, "sam21_mode", None) == "grid":
         return build_sam21_grid_context(label_names, grid_n=args.grid_n)
     else:

@@ -5,9 +5,15 @@
 # Secrets — NEVER commit
 .env
 .env.ml
+.env.sam3_agent
+.env.supabase
+.env.supabase.sample
+.env.tools
+.env.supabase
 
 # Documentation
 ONBOARDING.md
+*graphify*
 
 # Runtime data volumes
 data/
@@ -15,7 +21,15 @@ label-studio-data/
 minio-data/
 postgres-data/
 redis-data/
-logs/
+redisinsight-data/
+./logs/
+
+# Supabase runtime artifacts
+.tmp/
+supabase-volumes.backup.*/
+supabase-volumes/storage/
+supabase-volumes/db/data/
+supabase-volumes/db/data_migration/
 
 # HuggingFace model cache
 hf-cache/
@@ -36,6 +50,9 @@ venv/
 
 # Node / frontend
 node_modules/
+
+# Batch annotation resume state (local only, excluded from PR diffs)
+scripts/.batch_resume.json
 
 # OS
 .DS_Store

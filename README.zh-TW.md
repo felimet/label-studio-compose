@@ -15,16 +15,16 @@ English version: [README.md](README.md)
 > [!NOTE]
 > 版本使用建議：
 >
-> - `v1.0.2` 是原生 PostgreSQL 線（無需 Supabase）的最新穩定版本，
+> - `v1.0.4` 是原生 PostgreSQL 線（無需 Supabase）的最新穩定版本，
 >   包含所有 SAM3 修正與強化：影像 + 影片原生 point embedding、
 >   遮罩選擇模式（`adaptive`/`top1`/`topk`/`threshold`/`all`）、
 >   執行期門檻與選擇模式 UI 覆蓋、雙向影片追蹤、多物件 track 合併、
->   純文字 / 混合用途雙提示欄位。
-> - 若需要 Supabase 整合版本，請使用 `main` 或 `v1.1.2`。
+>   純文字 / 混合用途雙提示欄位，以及可選的 SAM3 Agent（LLM 輔助遮罩選擇）。
+> - 若需要 Supabase 整合版本，請使用 `main` 或 `v1.1.4`。
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.0.2 -b local-v1-native-pg
+> git checkout tags/v1.0.4 -b local-v1-native-pg
 > ```
 
 ## 5 分鐘快速開始
@@ -46,6 +46,15 @@ cp .env.ml.example .env.ml
 # 設定 LABEL_STUDIO_API_KEY（Legacy Token）與 HF_TOKEN
 
 make ml-up
+
+# 3) 可選 SAM3 Agent（LLM 輔助遮罩選擇，SAM3 後端專用）
+cp .env.sam3_agent.example .env.sam3_agent
+# 設定 SAM3_AGENT_ENABLED=true 並填入 LLM 端點（URL / KEY / MODEL）
+# 各支援平台範例（vLLM、Ollama、OpenAI、Gemini、Groq 等）詳見 .env.sam3_agent.example
+# LLM 必須具備視覺（multimodal）能力
+
+make up-sam3-agent
+# 若只變更 LLM 設定，無需重建映像：make restart-sam3-agent
 ```
 
 開啟：
