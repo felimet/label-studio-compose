@@ -323,6 +323,7 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Force-disable SAM3 Agent for this batch (use standard SAM3 text path).",
     )
+    p.set_defaults(agent_enabled=None)
     return p.parse_args()
 
 

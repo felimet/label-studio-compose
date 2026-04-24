@@ -220,7 +220,7 @@
         <tbody>
           <tr><td>Project ID</td><td>Label Studio project ID (visible in the URL: <code>/projects/{id}</code>). Required.</td></tr>
           <tr><td>Backend</td><td>ML backend type. <b>SAM3</b> uses text prompts for segmentation (recommended). <b>SAM2.1</b> uses geometric grid points (experimental).</td></tr>
-          <tr><td>ML Backend URL</td><td>Full URL of the ML backend's <code>/predict</code> endpoint. Default points to the Docker Compose service name.</td></tr>
+          <tr><td>ML Backend URL</td><td>Base URL of the ML backend (e.g. <code>http://sam3-image-backend:9090</code>). Do not include a trailing <code>/predict</code> — the batch script appends it automatically. Default points to the Docker Compose service name.</td></tr>
           <tr><td>Text Prompt</td><td>Free-form text describing the objects to segment (e.g. <code>cow, grass, fence</code>). SAM3 natively supports open-vocabulary prompts — any noun phrase or descriptive term works. When <b>SAM3 Agent</b> is enabled, the prompt is forwarded to the configured VLM (Vision-Language Model), which enables richer natural-language descriptions and multi-language input; capabilities depend on the VLM in use. Required for SAM3; ignored for SAM2.1.</td></tr>
           <tr><td>SAM2.1 Mode</td><td>Only visible when SAM2.1 is selected. <code>grid</code> sends a 3&times;3 grid of keypoints per image.</td></tr>
           <tr><td>Confidence</td><td>Score threshold (0&ndash;1). Predictions below this value are discarded. Lower values yield more masks but may include noise.</td></tr>
