@@ -5,6 +5,7 @@
 # Secrets — NEVER commit
 .env
 .env.ml
+.env.sam3_agent
 .env.supabase
 .env.supabase.sample
 .env.tools

@@ -65,6 +65,8 @@ make batch-server
 | `--grid-n INT` | `3` | SAM2.1 格點邊長（N×N 個點）|
 | `--basic-auth-user STR` | 空 | ML 後端 HTTP Basic Auth 帳號 |
 | `--basic-auth-pass STR` | 空 | ML 後端 HTTP Basic Auth 密碼 |
+| `--use-agent` | 關閉 | 強制啟用 SAM3 Agent（LLM 輔助遮罩選擇），覆蓋後端 `SAM3_AGENT_ENABLED` 環境變數。僅 SAM3 有效 |
+| `--no-agent` | 關閉 | 強制停用 SAM3 Agent，覆蓋後端環境變數。與 `--use-agent` 互斥 |
 
 ---
 
@@ -188,6 +190,7 @@ GET  /health                → {"status": "ok"}
 | Task IDs | 指定僅處理特定的 Task ID（逗號分隔，例：`1, 3, 17`）。若填寫，過濾條件優先於 `Max tasks` |
 | Dry run | 演習模式：不呼叫 ML 後端，不寫入預測。用於確認任務數量與設定 |
 | Force overwrite | 對已有人工標注的任務也寫入預測（預測與現有標注**並存**，不會刪除任何人工標注）|
+| SAM3 Agent | 啟用 LLM 輔助遮罩選擇（僅 SAM3）。勾選傳遞 `--use-agent`；取消勾選傳遞 `--no-agent`，可覆蓋後端 `SAM3_AGENT_ENABLED` 環境變數。需後端已設定 LLM 端點。預設**勾選**。詳見 [sam3-agent.md](sam3-agent.md) |
 | Auth (Username / Password) | ML 後端 HTTP Basic Auth 帳密（選填）。對應 `.env.ml` 中的 `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` |
 | Stop 按鈕 | 終止執行中的作業（先送 SIGTERM，5 秒後 SIGKILL）。僅在作業執行中時顯示 |
 

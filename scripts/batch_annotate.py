@@ -309,6 +309,21 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated block of task IDs to process exclusively (e.g. '1, 3, 17').",
     )
+    agent_grp = p.add_mutually_exclusive_group()
+    agent_grp.add_argument(
+        "--use-agent",
+        dest="agent_enabled",
+        action="store_true",
+        default=None,
+        help="Force-enable SAM3 Agent (LLM-assisted) for this batch, regardless of SAM3_AGENT_ENABLED env var.",
+    )
+    agent_grp.add_argument(
+        "--no-agent",
+        dest="agent_enabled",
+        action="store_false",
+        help="Force-disable SAM3 Agent for this batch (use standard SAM3 text path).",
+    )
+    p.set_defaults(agent_enabled=None)
     return p.parse_args()
 
 
@@ -330,7 +345,8 @@ def process_task(
             return task_id, "skip_human"
 
     context = build_context(
-        args.backend, label_names, args, text_prompt=args.text_prompt
+        args.backend, label_names, args, text_prompt=args.text_prompt,
+        agent_enabled=getattr(args, "agent_enabled", None),
     )
     status, result, score = call_predict(
         args.backend_url, task, context, label_config, args.project_id, basic_auth

@@ -8,6 +8,7 @@
         build-sam21-image build-sam21-video \
         test-sam3-image test-sam3-video \
         test-sam21-image test-sam21-video \
+        check-sam3-agent-env up-sam3-agent restart-sam3-agent \
 		supabase-up supabase-down supabase-logs \
 		supabase-standalone-up supabase-standalone-down supabase-standalone-logs \
 		supabase-sample-up supabase-sample-down supabase-sample-logs \
@@ -189,6 +190,16 @@ batch-annotate: check-core-env
 
 batch-server:
 	$(CORE_COMPOSE) up -d --build batch-server
+
+# ─── SAM3 Agent (image backend + LLM) ───────────────────────
+check-sam3-agent-env:
+	$(if $(wildcard .env.sam3_agent),,$(error Missing .env.sam3_agent. Run: cp .env.sam3_agent.example .env.sam3_agent))
+
+up-sam3-agent: check-sam3-agent-env
+	$(ML_COMPOSE) up -d --no-deps sam3-image-backend
+
+restart-sam3-agent: check-sam3-agent-env
+	$(ML_COMPOSE) up -d --no-deps --force-recreate sam3-image-backend
 
 # ─── Git ─────────────────────────────────────────────────────
 push:

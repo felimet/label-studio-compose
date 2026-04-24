@@ -19,11 +19,11 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 > [!NOTE]
 > Version guidance:
 >
-> - `main` and release `v1.1.3` include all SAM3 fixes and enhancements:
+> - `main` and release `v1.1.4` include all SAM3 fixes and enhancements:
 >   native point embeddings (image + video), mask selection modes (`adaptive`/`top1`/`topk`/`threshold`/`all`),
 >   runtime threshold and selection-mode UI overrides, bidirectional video tracking, multi-object track merging,
 >   and dual text-prompt fields (pure vs mixed-use).
-> - **If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.3` (hotfix line based on pre-Supabase baseline).**
+> - **If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.4` (hotfix line based on pre-Supabase baseline).**
 > - You can get each line in any of these ways:
 >   1. Git checkout (recommended for local dev)
 >   2. Download `Source code (zip)` from the corresponding Release
@@ -31,12 +31,12 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.1.3 -b local-main-v1.1.3
+> git checkout tags/v1.1.4 -b local-main-v1.1.4
 > # or
-> git checkout tags/v1.0.3 -b local-v1-native-pg
+> git checkout tags/v1.0.4 -b local-v1-native-pg
 > ```
 >
-> In `v1.0.3`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
+> In `v1.0.4`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
 
 ## Quick Start
 
@@ -69,6 +69,15 @@ make tools-up
 # 4) Supabase management command aliases
 # (already started in step 1 for default DB route)
 # make supabase-up / make supabase-down / make supabase-logs
+
+# 5) Optional SAM3 Agent (LLM-assisted mask selection for SAM3 backend)
+cp .env.sam3_agent.example .env.sam3_agent
+# Set SAM3_AGENT_ENABLED=true and configure LLM endpoint (URL / KEY / MODEL)
+# All supported providers (vLLM, Ollama, OpenAI, Gemini, Groq, etc.) are documented
+# in .env.sam3_agent.example. The LLM MUST support vision (multimodal) input.
+
+make up-sam3-agent
+# To apply LLM config changes without rebuilding: make restart-sam3-agent
 ```
 
 Overlay minimal example for Label Studio integration (NOT part of this branch runtime flow):

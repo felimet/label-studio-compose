@@ -27,6 +27,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env.ml
+      - path: .env.sam3_agent
+        required: false
     environment:
       - LOG_LEVEL=INFO
       - LABEL_STUDIO_URL=http://label-studio:8080
